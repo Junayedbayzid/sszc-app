@@ -242,13 +242,13 @@
 <script>
 // ===================== Firebase config =====================
 // ▼▼▼ এখানে তোমার নিজের Firebase প্রজেক্টের config বসাও (Firebase Console > Project settings > Web app) ▼▼▼
-const firebaseConfig = {apiKey: "AIzaSyBsxjzoaYHtWC6ME8_wfMKwKAGeKuLJUDY",
-authDomain: "sszc-app.firebaseapp.com",
-projectId: "sszc-app",
-storageBucket: "sszc-app.firebasestorage.app",
-messagingSenderId: "1099470113876",
-appId: "1:1099470113876:web:398e6313e282cca20ef1c1"
-  
+const firebaseConfig = {
+  apiKey: "PASTE_YOUR_API_KEY_HERE",
+  authDomain: "PASTE_YOUR_PROJECT.firebaseapp.com",
+  projectId: "PASTE_YOUR_PROJECT_ID",
+  storageBucket: "PASTE_YOUR_PROJECT.appspot.com",
+  messagingSenderId: "PASTE_SENDER_ID",
+  appId: "PASTE_APP_ID"
 };
 // ▲▲▲ এই ৬ লাইন বদলানোর পরেই অ্যাপ চালু হবে ▲▲▲
 
@@ -329,6 +329,8 @@ const T = {
     rejectedMsg:'বাতিল করা হয়েছে', siteCreated:'সাইট তৈরি হয়েছে', partnerAdded:'পার্টনার যোগ হয়েছে',
     ledgerFor:'হিসেব —', from:'উৎস', backToSites:'সাইট তালিকায় ফিরো',
     yourBalance:'তোমার ব্যালেন্স', all:'সবগুলো',
+    generalExpenses:'সাধারণ/অফিস খরচ', generalExpenseNote:'যে খরচ এখনো কোনো নির্দিষ্ট সাইটের সাথে যুক্ত না — সাইট শুরু হলে যুক্ত করে দিও',
+    totalGeneralExpense:'মোট সাধারণ খরচ', assignToSite:'সাইটে যুক্ত করো', receiptRequired:'রিসিট/ছবি আপলোড বাধ্যতামূলক',
   },
   en: {
     appName:'SSZC', tagline:'Partnership Ledger',
@@ -358,6 +360,8 @@ const T = {
     rejectedMsg:'Rejected', siteCreated:'Site created', partnerAdded:'Partner added',
     ledgerFor:'Ledger —', from:'Source', backToSites:'Back to sites',
     yourBalance:'Your balance', all:'All',
+    generalExpenses:'General / office expenses', generalExpenseNote:'Not linked to a specific site yet — assign once the related site starts',
+    totalGeneralExpense:'Total general expenses', assignToSite:'Assign to site', receiptRequired:'Receipt/photo is required',
   }
 };
 function t(key){ return T[STATE.lang][key] || key; }
@@ -413,6 +417,13 @@ function computeSiteSummary(siteId){
   return {site, expenses, incomes, incomeBreakdown, totalExpense, totalDistributable, perPartnerShare: totalDistributable/4};
 }
 
+// General / office expenses not tied to any site yet (siteId is null)
+function computeGeneralSummary(){
+  const entries = STATE.entries.filter(e=>!e.siteId && e.type==='expense' && e.status==='approved');
+  const total = entries.reduce((s,e)=>s+Number(e.amount||0),0);
+  return {expenses: entries, total};
+}
+
 // Combined ledger per partner across ALL sites + all approved entries
 function computePartnerBalances(){
   const balances = {};
@@ -428,6 +439,10 @@ function computePartnerBalances(){
     sum.incomeBreakdown.forEach(ib=>{
       STATE.partners.forEach(p=>{ balances[p.id] += ib.net/4; });
     });
+  });
+  // credit: general/office expenses (not yet linked to a site) — still owed back to whoever paid
+  computeGeneralSummary().expenses.forEach(e=>{
+    if(balances[e.paidBy] !== undefined) balances[e.paidBy] += Number(e.amount||0);
   });
   // debit: withdrawals
   STATE.entries.filter(e=>e.type==='withdrawal' && e.status==='approved').forEach(w=>{
@@ -671,8 +686,29 @@ function viewDashboard(){
 
 // ===================== Sites list =====================
 function viewSitesList(){
+  const gen = computeGeneralSummary();
   return `
     <div class="section-head">
+      <div><h2>${t('generalExpenses')}</h2><p>${t('generalExpenseNote')}</p></div>
+      <button class="btn steel small" onclick="openExpenseModal(null)">+ ${t('addExpense')}</button>
+    </div>
+    <div class="stat-grid">
+      <div class="stat neg"><div class="label">${t('totalGeneralExpense')}</div><div class="value">${money(gen.total)}</div></div>
+    </div>
+    ${gen.expenses.length>0 ? `
+    <div class="card">
+      ${gen.expenses.map(e=>`
+        <div class="flex-between" style="padding:9px 0; border-bottom:1px solid var(--line);">
+          <div>
+            <div style="font-weight:700; font-size:13.5px;">${escapeHtml(e.description||'—')}</div>
+            <div style="font-size:11.5px; color:var(--ink-soft); margin-top:2px;">${escapeHtml(partnerName(e.paidBy))} · ${fmtDate(e.createdAt)} · ${money(e.amount)}</div>
+          </div>
+          ${STATE.sites.length>0 ? `<button class="btn ghost small" onclick="openAssignSiteModal('${e.id}')">${t('assignToSite')}</button>` : ''}
+        </div>
+      `).join('')}
+    </div>` : ''}
+
+    <div class="section-head" style="margin-top:20px;">
       <div><h2>${t('sites')}</h2></div>
       <button class="btn amber" onclick="openNewSiteModal()">+ ${t('newSite')}</button>
     </div>
@@ -694,6 +730,22 @@ function viewSitesList(){
       </div>`;
     }).join('')}
   `;
+}
+function openAssignSiteModal(entryId){
+  openModal(`
+    <div class="modal-head"><h3>${t('assignToSite')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <div class="field"><label>${t('sites')}</label>
+      <select id="f_assignSite">${STATE.sites.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select>
+    </div>
+    <button class="btn amber" style="width:100%" onclick="submitAssignSite('${entryId}')">${t('assignToSite')}</button>
+  `);
+}
+async function submitAssignSite(entryId){
+  const siteId = document.getElementById('f_assignSite').value;
+  await fsUpdateDoc('entries', entryId, {siteId});
+  closeModal();
+  showToast(t('entrySaved'));
+  renderRoute();
 }
 function openSite(id){ STATE.activeSiteId = id; render(); }
 function backToSites(){ STATE.activeSiteId = null; renderRoute(); }
@@ -825,7 +877,8 @@ function openExpenseModal(siteId){
       <select id="f_paidBy">${STATE.partners.map(p=>`<option value="${p.id}" ${p.id===STATE.currentUser?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>
     </div>
     ${receiptFieldHtml()}
-    <button class="btn amber" style="width:100%; margin-top:6px;" onclick="submitExpense('${siteId}')">${t('submit')}</button>
+    <div id="receiptRequiredNote" style="font-size:11.5px; color:var(--brick); margin-top:-6px; margin-bottom:8px; display:none;">${t('receiptRequired')}</div>
+    <button class="btn amber" style="width:100%; margin-top:6px;" onclick="submitExpense(${siteId?`'${siteId}'`:'null'})">${t('submit')}</button>
   `);
 }
 function receiptFieldHtml(){
@@ -875,7 +928,8 @@ async function submitExpense(siteId){
   const description = document.getElementById('f_desc').value.trim();
   const paidBy = document.getElementById('f_paidBy').value;
   if(!amount || amount<=0){ showToast('Amount?'); return; }
-  await addEntry({siteId, type:'expense', amount, description, paidBy, receipt:_pendingReceipt||null});
+  if(!_pendingReceipt){ document.getElementById('receiptRequiredNote').style.display='block'; return; }
+  await addEntry({siteId: siteId||null, type:'expense', amount, description, paidBy, receipt:_pendingReceipt});
   _pendingReceipt = null;
   closeModal();
   showToast(t('entrySaved'));
@@ -889,6 +943,7 @@ function openIncomeModal(siteId){
     <div class="field"><label>${t('workerSalary')}</label><input id="f_wsal" type="number" step="0.01"></div>
     <div class="field"><label>${t('description')}</label><input id="f_idesc"></div>
     ${receiptFieldHtml()}
+    <div id="receiptRequiredNote" style="font-size:11.5px; color:var(--brick); margin-top:-6px; margin-bottom:8px; display:none;">${t('receiptRequired')}</div>
     <button class="btn amber" style="width:100%; margin-top:6px;" onclick="submitIncome('${siteId}')">${t('submit')}</button>
   `);
 }
@@ -897,7 +952,8 @@ async function submitIncome(siteId){
   const workerSalary = parseFloat(document.getElementById('f_wsal').value)||0;
   const description = document.getElementById('f_idesc').value.trim();
   if(!revenue || revenue<=0){ showToast('Revenue?'); return; }
-  await addEntry({siteId, type:'income', revenue, workerSalary, description, receipt:_pendingReceipt||null});
+  if(!_pendingReceipt){ document.getElementById('receiptRequiredNote').style.display='block'; return; }
+  await addEntry({siteId, type:'income', revenue, workerSalary, description, receipt:_pendingReceipt});
   _pendingReceipt = null;
   closeModal();
   showToast(t('entrySaved'));
@@ -920,7 +976,7 @@ function viewApprovals(){
       <div class="card">
         <div class="flex-between" style="margin-bottom:8px;">
           <div>
-            <div style="font-weight:800; font-size:14px;">${escapeHtml(site?site.name:'—')}</div>
+            <div style="font-weight:800; font-size:14px;">${site?escapeHtml(site.name):t('generalExpenses')}</div>
             <div style="font-size:12.5px; color:var(--ink-soft); margin-top:2px;">${desc}</div>
             <div style="font-size:11.5px; color:var(--ink-soft); margin-top:4px;">${t('submittedBy')}: ${escapeHtml(partnerName(e.submittedBy))} · ${fmtDate(e.createdAt)}</div>
           </div>
