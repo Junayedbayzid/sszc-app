@@ -336,7 +336,8 @@ const T = {
     confirmRemovePartner:'{name}-কে মুছে ফেলতে চাও? এটা আর ফিরিয়ে আনা যাবে না।',
     assignToSiteWarn:'এইটা শুধু এডমিনের কাজ — একবার যুক্ত হলে এই খরচ ওই সাইটের হিসাবে চলে যাবে।',
     companyNetProfit:'কোম্পানির প্রকৃত নিট লাভ (শুধু তথ্যের জন্য)',
-    companyNetProfitNote:'সব সাইটের লাভ বিয়োগ যে সাধারণ খরচ কোনো সাইটে যুক্ত হয়নি — পার্টনার ব্যালেন্সে এর কোনো প্রভাব নাই',
+    companyNetProfitNote:'সব সাইটের ইনকাম থেকে সাইট ও সাধারণ — সব খরচ বিয়োগ করে হিসাব করা হয় — পার্টনার ব্যালেন্সে এর কোনো প্রভাব নাই',
+    totalLiability:'কোম্পানির মোট দেনা (৪ পার্টনার মিলিয়ে)', totalLiabilityNote:'সাইট খরচ + সাধারণ/অফিস খরচ + লাভের ভাগ — সব মিলিয়ে কোম্পানিকে যা শোধ করতে হবে',
   },
   en: {
     appName:'SSZC', tagline:'Partnership Ledger',
@@ -373,7 +374,8 @@ const T = {
     confirmRemovePartner:'Remove {name}? This cannot be undone.',
     assignToSiteWarn:'Admin-only action — once assigned, this expense becomes part of that site accounting.',
     companyNetProfit:'Company actual net profit (informational only)',
-    companyNetProfitNote:'Sum of all site profits minus general expenses never assigned to a site — does not affect partner balances',
+    companyNetProfitNote:'All site income minus every expense — site-linked and general — does not affect partner balances',
+    totalLiability:'Total company debt (all 4 partners combined)', totalLiabilityNote:'Site expenses + general/office expenses + profit shares — total the company owes out',
   }
 };
 function t(key){ return T[STATE.lang][key] || key; }
@@ -436,17 +438,19 @@ function computeGeneralSummary(){
   return {expenses: entries, total};
 }
 
-// Informational only — total distributable profit across all sites, minus general
-// expenses that were never assigned to a site. Does NOT affect partner balances or
-// any site's own numbers; purely a big-picture summary for the dashboard.
+// Informational only — total distributable profit across all sites, minus ALL
+// expenses (both site expenses and general expenses not yet assigned to a site).
+// Does NOT affect partner balances or any site's own numbers; purely a big-picture
+// summary for the dashboard.
 function computeCompanyNetProfit(){
   let totalDistributable = 0;
+  let totalSiteExpense = 0;
   STATE.sites.forEach(s=>{
     const sum = computeSiteSummary(s.id);
-    if(sum) totalDistributable += sum.totalDistributable;
+    if(sum){ totalDistributable += sum.totalDistributable; totalSiteExpense += sum.totalExpense; }
   });
   const unassignedGeneral = computeGeneralSummary().total;
-  return totalDistributable - unassignedGeneral;
+  return totalDistributable - totalSiteExpense - unassignedGeneral;
 }
 
 // Combined ledger per partner across ALL sites + all approved entries
@@ -474,6 +478,14 @@ function computePartnerBalances(){
     if(balances[w.paidBy] !== undefined) balances[w.paidBy] -= Number(w.amount||0);
   });
   return balances;
+}
+
+// Total cash the company must eventually pay out across all 4 partners combined —
+// this is the sum of every partner's balance (site expenses + general/office
+// expenses + profit shares − withdrawals, for all of them added together).
+function computeTotalCompanyLiability(){
+  const balances = computePartnerBalances();
+  return Object.values(balances).reduce((s,v)=>s+v, 0);
 }
 
 function pendingCount(){
@@ -721,6 +733,16 @@ function viewDashboard(){
           <div style="font-size:11.5px; color:var(--ink-soft);">${t('companyNetProfitNote')}</div>
         </div>
         <div style="font-size:20px; font-weight:800; white-space:nowrap; margin-left:10px;" class="${computeCompanyNetProfit()<0?'neg-text':'pos-text'}">${money(computeCompanyNetProfit())}</div>
+      </div>
+    </div>
+
+    <div class="card" style="border-left:4px solid var(--brick);">
+      <div class="flex-between">
+        <div>
+          <div class="card-title" style="margin-bottom:2px;">${t('totalLiability')}</div>
+          <div style="font-size:11.5px; color:var(--ink-soft);">${t('totalLiabilityNote')}</div>
+        </div>
+        <div style="font-size:20px; font-weight:800; white-space:nowrap; margin-left:10px;" class="neg-text">${money(computeTotalCompanyLiability())}</div>
       </div>
     </div>
 
