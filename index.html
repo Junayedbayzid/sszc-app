@@ -332,6 +332,9 @@ const T = {
     generalExpenses:'সাধারণ/অফিস খরচ', generalExpenseNote:'যে খরচ এখনো কোনো নির্দিষ্ট সাইটের সাথে যুক্ত না — সাইট শুরু হলে যুক্ত করে দিও',
     totalGeneralExpense:'মোট সাধারণ খরচ', assignToSite:'সাইটে যুক্ত করো', receiptRequired:'রিসিট/ছবি আপলোড বাধ্যতামূলক',
     confirmDelete:'এই এন্ট্রিটা মুছে ফেলতে চাও? এটা আর ফিরিয়ে আনা যাবে না।', deletedMsg:'মুছে ফেলা হয়েছে',
+    edit:'এডিট', areYouSure:'তুমি কি নিশ্চিত?', consciouslyConfirm:'হ্যাঁ, আমি সজ্ঞানে ও নিশ্চিতভাবে এই পদক্ষেপ নিচ্ছি',
+    confirmRemovePartner:'{name}-কে মুছে ফেলতে চাও? এটা আর ফিরিয়ে আনা যাবে না।',
+    assignToSiteWarn:'এইটা শুধু এডমিনের কাজ — একবার যুক্ত হলে এই খরচ ওই সাইটের হিসাবে চলে যাবে।',
   },
   en: {
     appName:'SSZC', tagline:'Partnership Ledger',
@@ -364,6 +367,9 @@ const T = {
     generalExpenses:'General / office expenses', generalExpenseNote:'Not linked to a specific site yet — assign once the related site starts',
     totalGeneralExpense:'Total general expenses', assignToSite:'Assign to site', receiptRequired:'Receipt/photo is required',
     confirmDelete:'Delete this entry? This cannot be undone.', deletedMsg:'Deleted',
+    edit:'Edit', areYouSure:'Are you sure?', consciouslyConfirm:'Yes, I am knowingly and deliberately taking this action',
+    confirmRemovePartner:'Remove {name}? This cannot be undone.',
+    assignToSiteWarn:'Admin-only action — once assigned, this expense becomes part of that site accounting.',
   }
 };
 function t(key){ return T[STATE.lang][key] || key; }
@@ -469,6 +475,16 @@ async function updatePartners(){
 }
 async function removePartner(id){
   await fsDeleteDoc('partners', id);
+}
+function confirmRemovePartner(id){
+  const isFirstRun = STATE.currentUser === '__setup__';
+  const me = isFirstRun ? null : STATE.partners.find(p=>p.id===STATE.currentUser);
+  if(!isFirstRun && !(me && me.isAdmin)) return; // admin-only action (setup phase is exempt)
+  const p = STATE.partners.find(x=>x.id===id);
+  openConfirmModal(t('confirmRemovePartner').replace('{name}', p?p.name:''), t('remove'), async ()=>{
+    await removePartner(id);
+    renderRoute();
+  });
 }
 async function addSite(data){
   const s = {id:uid(), name:data.name, kafeelPercent:data.kafeelPercent, investor:data.investor||null, createdAt:Date.now(), createdBy:STATE.currentUser};
@@ -578,10 +594,10 @@ function escapeHtml(s){
   return (s||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
-const NAV_ITEMS = [
+const NAV_ITEMS_ALL = [
   {id:'dashboard', num:1, icon:'▦'},
   {id:'sites', num:2, icon:'▤'},
-  {id:'approvals', num:3, icon:'✓'},
+  {id:'approvals', num:3, icon:'✓', adminOnly:true},
   {id:'settings', num:4, icon:'⚙'},
 ];
 
@@ -589,6 +605,7 @@ function renderMain(){
   const app = document.getElementById('app');
   const me = STATE.currentUser === '__setup__' ? null : STATE.partners.find(p=>p.id===STATE.currentUser);
   const pc = pendingCount();
+  const NAV_ITEMS = NAV_ITEMS_ALL.filter(n => !n.adminOnly || (me && me.isAdmin));
 
   app.innerHTML = `
     <div class="topbar">
@@ -628,6 +645,8 @@ function renderMain(){
         </button>`).join('')}
     </nav>
   `;
+  // if a non-admin somehow lands on the approvals route, bounce to dashboard
+  if(STATE.route==='approvals' && !(me && me.isAdmin)) STATE.route = 'dashboard';
   renderRoute();
 }
 function setLang(l){ STATE.lang = l; localStorage_safe_set('sszc_lang', l); render(); }
@@ -654,6 +673,7 @@ function viewDashboard(){
   const balances = computePartnerBalances();
   const me = STATE.partners.find(p=>p.id===STATE.currentUser);
   const myBal = balances[STATE.currentUser] || 0;
+  const gen = computeGeneralSummary();
   return `
     <div class="section-head"><div><h2>${t('dashboard')}</h2></div></div>
     <div class="stat-grid">
@@ -665,12 +685,37 @@ function viewDashboard(){
         <div class="label">${t('totalSites')}</div>
         <div class="value">${STATE.sites.length}</div>
       </div>
+      <div class="stat neg" style="cursor:pointer;" onclick="openExpenseModal(null)">
+        <div class="label">${t('totalGeneralExpense')}</div>
+        <div class="value">${money(gen.total)}</div>
+        <div style="font-size:11px; color:var(--amber-deep); font-weight:700; margin-top:4px;">+ ${t('addExpense')}</div>
+      </div>
+      ${me && me.isAdmin ? `
       <div class="stat ${pendingCount()>0?'neg':''}">
         <div class="label">${t('pendingCount')}</div>
         <div class="value">${pendingCount()}</div>
-      </div>
+      </div>` : ''}
     </div>
+
+    <div class="section-head"><div><h3 style="font-size:15px;">${t('generalExpenses')}</h3><p>${t('generalExpenseNote')}</p></div></div>
+    ${gen.expenses.length===0 ? `<div class="empty">—</div>` : `
     <div class="card">
+      ${gen.expenses.map(e=>`
+        <div class="flex-between" style="padding:9px 0; border-bottom:1px solid var(--line);">
+          <div>
+            <div style="font-weight:700; font-size:13.5px;">${escapeHtml(e.description||'—')}</div>
+            <div style="font-size:11.5px; color:var(--ink-soft); margin-top:2px;">${escapeHtml(partnerName(e.paidBy))} · ${fmtDate(e.createdAt)} · ${money(e.amount)}</div>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            ${canDeleteEntry(e) ? `<button class="btn ghost small" onclick="openEditExpenseModal('${e.id}')">${t('edit')}</button>` : ''}
+            ${(me && me.isAdmin && STATE.sites.length>0) ? `<button class="btn ghost small" onclick="openAssignSiteModal('${e.id}')">${t('assignToSite')}</button>` : ''}
+            ${canDeleteEntry(e) ? `<button class="btn danger small" onclick="deleteEntry('${e.id}')">${t('remove')}</button>` : ''}
+          </div>
+        </div>
+      `).join('')}
+    </div>`}
+
+    <div class="card" style="margin-top:16px;">
       <div class="card-title">${t('partnerBalances')}</div>
       <table>
         <thead><tr><th>${t('name')}</th><th style="text-align:right">${t('combinedBalance')}</th></tr></thead>
@@ -688,32 +733,8 @@ function viewDashboard(){
 
 // ===================== Sites list =====================
 function viewSitesList(){
-  const gen = computeGeneralSummary();
   return `
     <div class="section-head">
-      <div><h2>${t('generalExpenses')}</h2><p>${t('generalExpenseNote')}</p></div>
-      <button class="btn steel small" onclick="openExpenseModal(null)">+ ${t('addExpense')}</button>
-    </div>
-    <div class="stat-grid">
-      <div class="stat neg"><div class="label">${t('totalGeneralExpense')}</div><div class="value">${money(gen.total)}</div></div>
-    </div>
-    ${gen.expenses.length>0 ? `
-    <div class="card">
-      ${gen.expenses.map(e=>`
-        <div class="flex-between" style="padding:9px 0; border-bottom:1px solid var(--line);">
-          <div>
-            <div style="font-weight:700; font-size:13.5px;">${escapeHtml(e.description||'—')}</div>
-            <div style="font-size:11.5px; color:var(--ink-soft); margin-top:2px;">${escapeHtml(partnerName(e.paidBy))} · ${fmtDate(e.createdAt)} · ${money(e.amount)}</div>
-          </div>
-          <div style="display:flex; gap:6px;">
-            ${STATE.sites.length>0 ? `<button class="btn ghost small" onclick="openAssignSiteModal('${e.id}')">${t('assignToSite')}</button>` : ''}
-            ${canDeleteEntry(e) ? `<button class="btn danger small" onclick="deleteEntry('${e.id}')">${t('remove')}</button>` : ''}
-          </div>
-        </div>
-      `).join('')}
-    </div>` : ''}
-
-    <div class="section-head" style="margin-top:20px;">
       <div><h2>${t('sites')}</h2></div>
       <button class="btn amber" onclick="openNewSiteModal()">+ ${t('newSite')}</button>
     </div>
@@ -737,12 +758,19 @@ function viewSitesList(){
   `;
 }
 function openAssignSiteModal(entryId){
+  const me = STATE.partners.find(p=>p.id===STATE.currentUser);
+  if(!me || !me.isAdmin) return; // admin-only action
   openModal(`
     <div class="modal-head"><h3>${t('assignToSite')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:12px;">${t('assignToSiteWarn')}</p>
     <div class="field"><label>${t('sites')}</label>
       <select id="f_assignSite">${STATE.sites.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select>
     </div>
-    <button class="btn amber" style="width:100%" onclick="submitAssignSite('${entryId}')">${t('assignToSite')}</button>
+    <label style="display:flex; align-items:flex-start; gap:8px; font-size:12.5px; margin-bottom:14px; cursor:pointer;">
+      <input type="checkbox" id="assignConfirmCheck" style="width:auto; margin-top:2px;" onchange="document.getElementById('assignConfirmBtn').disabled = !this.checked;">
+      <span>${t('consciouslyConfirm')}</span>
+    </label>
+    <button class="btn amber" style="width:100%" id="assignConfirmBtn" disabled onclick="submitAssignSite('${entryId}')">${t('assignToSite')}</button>
   `);
 }
 async function submitAssignSite(entryId){
@@ -758,12 +786,86 @@ function canDeleteEntry(e){
   if(me.isAdmin) return true;
   return e.submittedBy===STATE.currentUser && e.status==='pending';
 }
-async function deleteEntry(entryId){
-  if(!confirm(t('confirmDelete'))) return;
-  await fsDeleteDoc('entries', entryId);
-  showToast(t('deletedMsg'));
+
+// ===================== Two-step confirmation modal =====================
+let _confirmAction = null;
+function openConfirmModal(message, actionLabel, onConfirm){
+  _confirmAction = onConfirm;
+  openModal(`
+    <div class="modal-head"><h3>${t('areYouSure')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <p style="font-size:13.5px; color:var(--ink-soft); margin-bottom:14px;">${escapeHtml(message)}</p>
+    <label style="display:flex; align-items:flex-start; gap:8px; font-size:13px; margin-bottom:16px; cursor:pointer;">
+      <input type="checkbox" id="confirmCheck" style="width:auto; margin-top:2px;" onchange="document.getElementById('confirmActionBtn').disabled = !this.checked;">
+      <span>${t('consciouslyConfirm')}</span>
+    </label>
+    <div style="display:flex; gap:8px;">
+      <button class="btn ghost" style="flex:1;" onclick="closeModal()">${t('cancel')}</button>
+      <button class="btn danger" style="flex:1;" id="confirmActionBtn" disabled onclick="runConfirmAction()">${escapeHtml(actionLabel)}</button>
+    </div>
+  `);
+}
+function runConfirmAction(){
+  const fn = _confirmAction;
+  _confirmAction = null;
+  closeModal();
+  if(fn) fn();
+}
+function deleteEntry(entryId){
+  openConfirmModal(t('confirmDelete'), t('remove'), async ()=>{
+    await fsDeleteDoc('entries', entryId);
+    showToast(t('deletedMsg'));
+    renderRoute();
+  });
+}
+
+// ===================== Edit entry =====================
+function editEntry(entryId){
+  const e = STATE.entries.find(x=>x.id===entryId);
+  if(!e || !canDeleteEntry(e)) return; // same permission rule as delete
+  if(e.type==='expense') openEditExpenseModal(e);
+  else if(e.type==='income') openEditIncomeModal(e);
+}
+function openEditExpenseModal(e){
+  openModal(`
+    <div class="modal-head"><h3>${t('edit')} — ${t('addExpense')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <div class="field"><label>${t('amount')}</label><input id="f_amt" type="number" step="0.01" value="${e.amount}"></div>
+    <div class="field"><label>${t('description')}</label><input id="f_desc" value="${escapeHtml(e.description||'')}"></div>
+    <div class="field"><label>${t('paidBy')}</label>
+      <select id="f_paidBy">${STATE.partners.map(p=>`<option value="${p.id}" ${p.id===e.paidBy?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>
+    </div>
+    <button class="btn amber" style="width:100%; margin-top:6px;" onclick="submitEditExpense('${e.id}')">${t('save')}</button>
+  `);
+}
+async function submitEditExpense(entryId){
+  const amount = parseFloat(document.getElementById('f_amt').value);
+  const description = document.getElementById('f_desc').value.trim();
+  const paidBy = document.getElementById('f_paidBy').value;
+  if(!amount || amount<=0){ showToast('Amount?'); return; }
+  await fsUpdateDoc('entries', entryId, {amount, description, paidBy});
+  closeModal();
+  showToast(t('entrySaved'));
   renderRoute();
 }
+function openEditIncomeModal(e){
+  openModal(`
+    <div class="modal-head"><h3>${t('edit')} — ${t('addIncome')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <div class="field"><label>${t('revenue')}</label><input id="f_rev" type="number" step="0.01" value="${e.revenue}"></div>
+    <div class="field"><label>${t('workerSalary')}</label><input id="f_wsal" type="number" step="0.01" value="${e.workerSalary||0}"></div>
+    <div class="field"><label>${t('description')}</label><input id="f_idesc" value="${escapeHtml(e.description||'')}"></div>
+    <button class="btn amber" style="width:100%; margin-top:6px;" onclick="submitEditIncome('${e.id}')">${t('save')}</button>
+  `);
+}
+async function submitEditIncome(entryId){
+  const revenue = parseFloat(document.getElementById('f_rev').value);
+  const workerSalary = parseFloat(document.getElementById('f_wsal').value)||0;
+  const description = document.getElementById('f_idesc').value.trim();
+  if(!revenue || revenue<=0){ showToast('Revenue?'); return; }
+  await fsUpdateDoc('entries', entryId, {revenue, workerSalary, description});
+  closeModal();
+  showToast(t('entrySaved'));
+  renderRoute();
+}
+
 function openSite(id){ STATE.activeSiteId = id; render(); }
 function backToSites(){ STATE.activeSiteId = null; renderRoute(); }
 
@@ -849,7 +951,7 @@ function viewSiteDetail(siteId){
               <td>${escapeHtml(e.description||'—')}<div style="font-size:11px;color:var(--ink-soft);">${fmtDate(e.createdAt)}</div></td>
               <td>${escapeHtml(partnerName(e.paidBy))}</td>
               <td class="num-cell">${money(e.amount)}</td>
-              <td>${canDeleteEntry(e) ? `<button class="btn danger small" onclick="deleteEntry('${e.id}')">${t('remove')}</button>` : ''}</td>
+              <td>${canDeleteEntry(e) ? `<button class="btn ghost small" onclick="editEntry('${e.id}')">${t('edit')}</button> <button class="btn danger small" onclick="deleteEntry('${e.id}')">${t('remove')}</button>` : ''}</td>
             </tr>`).join('')}
         </tbody>
       </table>`}
@@ -868,7 +970,7 @@ function viewSiteDetail(siteId){
               <td>${money(ib.kafeelCut)}</td>
               ${site.investor?('<td>'+money(ib.investorCut)+'</td>'):''}
               <td class="num-cell pos-text">${money(ib.net)}</td>
-              <td>${canDeleteEntry(ib.entry) ? `<button class="btn danger small" onclick="deleteEntry('${ib.entry.id}')">${t('remove')}</button>` : ''}</td>
+              <td>${canDeleteEntry(ib.entry) ? `<button class="btn ghost small" onclick="editEntry('${ib.entry.id}')">${t('edit')}</button> <button class="btn danger small" onclick="deleteEntry('${ib.entry.id}')">${t('remove')}</button>` : ''}</td>
             </tr>`).join('')}
         </tbody>
       </table>`}
@@ -1006,6 +1108,7 @@ function viewApprovals(){
           ${me.isAdmin ? `
           <button class="btn green small" onclick="approveEntry('${e.id}')">${t('approve')}</button>
           <button class="btn danger small" onclick="rejectEntry('${e.id}')">${t('reject')}</button>` : ''}
+          ${canDeleteEntry(e) ? `<button class="btn ghost small" onclick="editEntry('${e.id}')">${t('edit')}</button>` : ''}
           ${canDeleteEntry(e) ? `<button class="btn ghost small" onclick="deleteEntry('${e.id}')">${t('remove')}</button>` : ''}
         </div>
       </div>`;
@@ -1018,8 +1121,10 @@ async function rejectEntry(id){ await setEntryStatus(id,'rejected'); showToast(t
 // ===================== Settings =====================
 function viewSettings(){
   const isFirstRun = STATE.currentUser === '__setup__';
+  const me = isFirstRun ? null : STATE.partners.find(p=>p.id===STATE.currentUser);
+  const canManage = isFirstRun || (me && me.isAdmin);
   return `
-    <div class="section-head"><div><h2>${t('settings')}</h2></div></div>
+    <div class="section-head"><div><h2>${t('settings')}</h2>${!canManage?`<p>${t('adminOnly')}</p>`:''}</div></div>
     <div class="card">
       <div class="card-title">${t('partners_')} ${STATE.partners.length ? '('+STATE.partners.length+'/4+)' : ''}</div>
       ${STATE.partners.length===0 ? `<div class="empty" style="padding:10px;">—</div>` : STATE.partners.map(p=>`
@@ -1028,18 +1133,20 @@ function viewSettings(){
             <div style="font-weight:700; font-size:13.5px;">${escapeHtml(p.name)} ${p.isAdmin?'<span class="pill approved">'+t('isAdmin')+'</span>':''}</div>
             <div style="font-size:11.5px; color:var(--ink-soft);">PIN: ${'•'.repeat((p.pin||'').length)}</div>
           </div>
+          ${canManage ? `
           <div style="display:flex; gap:6px;">
             ${!p.isAdmin?`<button class="btn ghost small" onclick="makeAdmin('${p.id}')">${t('makeAdmin')}</button>`:''}
-            <button class="btn danger small" onclick="removePartner('${p.id}')">${t('remove')}</button>
-          </div>
+            <button class="btn danger small" onclick="confirmRemovePartner('${p.id}')">${t('remove')}</button>
+          </div>` : ''}
         </div>
       `).join('')}
+      ${canManage ? `
       <div class="divider"></div>
       <div class="row2">
         <div class="field"><label>${t('name')}</label><input id="np_name"></div>
         <div class="field"><label>${t('pin')}</label><input id="np_pin" type="password" inputmode="numeric" maxlength="6"></div>
       </div>
-      <button class="btn amber" onclick="submitAddPartner()">+ ${t('addPartner')}</button>
+      <button class="btn amber" onclick="submitAddPartner()">+ ${t('addPartner')}</button>` : ''}
     </div>
     ${isFirstRun && STATE.partners.length>0 ? `
     <button class="btn steel" style="width:100%;" onclick="finishFirstSetup()">${t('login')} &rarr;</button>` : ''}
