@@ -335,6 +335,8 @@ const T = {
     edit:'এডিট', areYouSure:'তুমি কি নিশ্চিত?', consciouslyConfirm:'হ্যাঁ, আমি সজ্ঞানে ও নিশ্চিতভাবে এই পদক্ষেপ নিচ্ছি',
     confirmRemovePartner:'{name}-কে মুছে ফেলতে চাও? এটা আর ফিরিয়ে আনা যাবে না।',
     assignToSiteWarn:'এইটা শুধু এডমিনের কাজ — একবার যুক্ত হলে এই খরচ ওই সাইটের হিসাবে চলে যাবে।',
+    companyNetProfit:'কোম্পানির প্রকৃত নিট লাভ (শুধু তথ্যের জন্য)',
+    companyNetProfitNote:'সব সাইটের লাভ বিয়োগ যে সাধারণ খরচ কোনো সাইটে যুক্ত হয়নি — পার্টনার ব্যালেন্সে এর কোনো প্রভাব নাই',
   },
   en: {
     appName:'SSZC', tagline:'Partnership Ledger',
@@ -370,6 +372,8 @@ const T = {
     edit:'Edit', areYouSure:'Are you sure?', consciouslyConfirm:'Yes, I am knowingly and deliberately taking this action',
     confirmRemovePartner:'Remove {name}? This cannot be undone.',
     assignToSiteWarn:'Admin-only action — once assigned, this expense becomes part of that site accounting.',
+    companyNetProfit:'Company actual net profit (informational only)',
+    companyNetProfitNote:'Sum of all site profits minus general expenses never assigned to a site — does not affect partner balances',
   }
 };
 function t(key){ return T[STATE.lang][key] || key; }
@@ -430,6 +434,19 @@ function computeGeneralSummary(){
   const entries = STATE.entries.filter(e=>!e.siteId && e.type==='expense' && e.status==='approved');
   const total = entries.reduce((s,e)=>s+Number(e.amount||0),0);
   return {expenses: entries, total};
+}
+
+// Informational only — total distributable profit across all sites, minus general
+// expenses that were never assigned to a site. Does NOT affect partner balances or
+// any site's own numbers; purely a big-picture summary for the dashboard.
+function computeCompanyNetProfit(){
+  let totalDistributable = 0;
+  STATE.sites.forEach(s=>{
+    const sum = computeSiteSummary(s.id);
+    if(sum) totalDistributable += sum.totalDistributable;
+  });
+  const unassignedGeneral = computeGeneralSummary().total;
+  return totalDistributable - unassignedGeneral;
 }
 
 // Combined ledger per partner across ALL sites + all approved entries
@@ -695,6 +712,16 @@ function viewDashboard(){
         <div class="label">${t('pendingCount')}</div>
         <div class="value">${pendingCount()}</div>
       </div>` : ''}
+    </div>
+
+    <div class="card" style="border-left:4px solid var(--steel);">
+      <div class="flex-between">
+        <div>
+          <div class="card-title" style="margin-bottom:2px;">${t('companyNetProfit')}</div>
+          <div style="font-size:11.5px; color:var(--ink-soft);">${t('companyNetProfitNote')}</div>
+        </div>
+        <div style="font-size:20px; font-weight:800; white-space:nowrap; margin-left:10px;" class="${computeCompanyNetProfit()<0?'neg-text':'pos-text'}">${money(computeCompanyNetProfit())}</div>
+      </div>
     </div>
 
     <div class="section-head"><div><h3 style="font-size:15px;">${t('generalExpenses')}</h3><p>${t('generalExpenseNote')}</p></div></div>
