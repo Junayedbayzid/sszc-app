@@ -331,6 +331,7 @@ const T = {
     yourBalance:'তোমার ব্যালেন্স', all:'সবগুলো',
     generalExpenses:'সাধারণ/অফিস খরচ', generalExpenseNote:'যে খরচ এখনো কোনো নির্দিষ্ট সাইটের সাথে যুক্ত না — সাইট শুরু হলে যুক্ত করে দিও',
     totalGeneralExpense:'মোট সাধারণ খরচ', assignToSite:'সাইটে যুক্ত করো', receiptRequired:'রিসিট/ছবি আপলোড বাধ্যতামূলক',
+    confirmDelete:'এই এন্ট্রিটা মুছে ফেলতে চাও? এটা আর ফিরিয়ে আনা যাবে না।', deletedMsg:'মুছে ফেলা হয়েছে',
   },
   en: {
     appName:'SSZC', tagline:'Partnership Ledger',
@@ -362,6 +363,7 @@ const T = {
     yourBalance:'Your balance', all:'All',
     generalExpenses:'General / office expenses', generalExpenseNote:'Not linked to a specific site yet — assign once the related site starts',
     totalGeneralExpense:'Total general expenses', assignToSite:'Assign to site', receiptRequired:'Receipt/photo is required',
+    confirmDelete:'Delete this entry? This cannot be undone.', deletedMsg:'Deleted',
   }
 };
 function t(key){ return T[STATE.lang][key] || key; }
@@ -703,7 +705,10 @@ function viewSitesList(){
             <div style="font-weight:700; font-size:13.5px;">${escapeHtml(e.description||'—')}</div>
             <div style="font-size:11.5px; color:var(--ink-soft); margin-top:2px;">${escapeHtml(partnerName(e.paidBy))} · ${fmtDate(e.createdAt)} · ${money(e.amount)}</div>
           </div>
-          ${STATE.sites.length>0 ? `<button class="btn ghost small" onclick="openAssignSiteModal('${e.id}')">${t('assignToSite')}</button>` : ''}
+          <div style="display:flex; gap:6px;">
+            ${STATE.sites.length>0 ? `<button class="btn ghost small" onclick="openAssignSiteModal('${e.id}')">${t('assignToSite')}</button>` : ''}
+            ${canDeleteEntry(e) ? `<button class="btn danger small" onclick="deleteEntry('${e.id}')">${t('remove')}</button>` : ''}
+          </div>
         </div>
       `).join('')}
     </div>` : ''}
@@ -745,6 +750,18 @@ async function submitAssignSite(entryId){
   await fsUpdateDoc('entries', entryId, {siteId});
   closeModal();
   showToast(t('entrySaved'));
+  renderRoute();
+}
+function canDeleteEntry(e){
+  const me = STATE.partners.find(p=>p.id===STATE.currentUser);
+  if(!me) return false;
+  if(me.isAdmin) return true;
+  return e.submittedBy===STATE.currentUser && e.status==='pending';
+}
+async function deleteEntry(entryId){
+  if(!confirm(t('confirmDelete'))) return;
+  await fsDeleteDoc('entries', entryId);
+  showToast(t('deletedMsg'));
   renderRoute();
 }
 function openSite(id){ STATE.activeSiteId = id; render(); }
@@ -825,13 +842,14 @@ function viewSiteDetail(siteId){
       <div class="card-title">${t('expenses')}</div>
       ${expenses.length===0 ? `<div class="empty" style="padding:16px;">—</div>` : `
       <table>
-        <thead><tr><th>${t('description')}</th><th>${t('paidBy')}</th><th style="text-align:right">${t('amount')}</th></tr></thead>
+        <thead><tr><th>${t('description')}</th><th>${t('paidBy')}</th><th style="text-align:right">${t('amount')}</th><th></th></tr></thead>
         <tbody>
           ${expenses.map(e=>`
             <tr>
               <td>${escapeHtml(e.description||'—')}<div style="font-size:11px;color:var(--ink-soft);">${fmtDate(e.createdAt)}</div></td>
               <td>${escapeHtml(partnerName(e.paidBy))}</td>
               <td class="num-cell">${money(e.amount)}</td>
+              <td>${canDeleteEntry(e) ? `<button class="btn danger small" onclick="deleteEntry('${e.id}')">${t('remove')}</button>` : ''}</td>
             </tr>`).join('')}
         </tbody>
       </table>`}
@@ -841,7 +859,7 @@ function viewSiteDetail(siteId){
       <div class="card-title">${t('incomeEntries')}</div>
       ${incomeBreakdown.length===0 ? `<div class="empty" style="padding:16px;">—</div>` : `
       <table>
-        <thead><tr><th>${t('revenue')}</th><th>${t('grossProfit')}</th><th>${t('kafeelCut')}</th>${site.investor?('<th>'+t('investorCut')+'</th>'):''}<th style="text-align:right">${t('netDistributable')}</th></tr></thead>
+        <thead><tr><th>${t('revenue')}</th><th>${t('grossProfit')}</th><th>${t('kafeelCut')}</th>${site.investor?('<th>'+t('investorCut')+'</th>'):''}<th style="text-align:right">${t('netDistributable')}</th><th></th></tr></thead>
         <tbody>
           ${incomeBreakdown.map(ib=>`
             <tr>
@@ -850,6 +868,7 @@ function viewSiteDetail(siteId){
               <td>${money(ib.kafeelCut)}</td>
               ${site.investor?('<td>'+money(ib.investorCut)+'</td>'):''}
               <td class="num-cell pos-text">${money(ib.net)}</td>
+              <td>${canDeleteEntry(ib.entry) ? `<button class="btn danger small" onclick="deleteEntry('${ib.entry.id}')">${t('remove')}</button>` : ''}</td>
             </tr>`).join('')}
         </tbody>
       </table>`}
@@ -983,11 +1002,12 @@ function viewApprovals(){
           <span class="pill pending">${t('pending')}</span>
         </div>
         ${e.receipt?`<img src="${e.receipt}" class="receipt-thumb">`:''}
-        ${me.isAdmin ? `
-        <div style="display:flex; gap:8px; margin-top:10px;">
+        <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+          ${me.isAdmin ? `
           <button class="btn green small" onclick="approveEntry('${e.id}')">${t('approve')}</button>
-          <button class="btn danger small" onclick="rejectEntry('${e.id}')">${t('reject')}</button>
-        </div>` : ''}
+          <button class="btn danger small" onclick="rejectEntry('${e.id}')">${t('reject')}</button>` : ''}
+          ${canDeleteEntry(e) ? `<button class="btn ghost small" onclick="deleteEntry('${e.id}')">${t('remove')}</button>` : ''}
+        </div>
       </div>`;
     }).join('')}
   `;
