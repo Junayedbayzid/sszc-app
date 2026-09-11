@@ -779,16 +779,6 @@ function viewDashboard(){
       </div>
     </div>
 
-    <div class="card" style="border-left:4px solid var(--brick);">
-      <div class="flex-between">
-        <div>
-          <div class="card-title" style="margin-bottom:2px;">${t('totalLiability')}</div>
-          <div style="font-size:11.5px; color:var(--ink-soft);">${t('totalLiabilityNote')}</div>
-        </div>
-        <div style="font-size:20px; font-weight:800; white-space:nowrap; margin-left:10px;" class="neg-text">${money(computeTotalCompanyLiability())}</div>
-      </div>
-    </div>
-
     <div class="section-head"><div><h3 style="font-size:15px;">${t('generalExpenses')}</h3><p>${t('generalExpenseNote')}</p></div></div>
     ${gen.expenses.length===0 ? `<div class="empty">—</div>` : `
     <div class="card">
@@ -1022,19 +1012,72 @@ async function submitNewSite(){
   renderRoute();
 }
 
+function openEditSiteModal(siteId){
+  const site = STATE.sites.find(s=>s.id===siteId);
+  if(!site) return;
+  const currentParticipants = (site.participants && site.participants.length) ? site.participants : STATE.partners.map(p=>p.id);
+  openModal(`
+    <div class="modal-head"><h3>${t('editSite')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <div class="field"><label>${t('siteName')}</label><input id="f_siteName" value="${escapeHtml(site.name)}"></div>
+    <div class="field"><label>${t('kafeelPercent')}</label><input id="f_kafeelPct" type="number" step="0.1" value="${site.kafeelPercent}"></div>
+    <div class="field">
+      <label>${t('participants')}</label>
+      <div style="font-size:11.5px; color:var(--ink-soft); margin-bottom:6px;">${t('participantsEditNote')}</div>
+      ${STATE.partners.map(p=>`
+        <label style="display:flex; align-items:center; gap:8px; padding:6px 0;">
+          <input type="checkbox" class="f_participant" value="${p.id}" ${currentParticipants.includes(p.id)?'checked':''} style="width:auto;"> ${escapeHtml(p.name)}
+        </label>
+      `).join('')}
+    </div>
+    <div class="field">
+      <label style="display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="f_hasInvestor" ${site.investor?'checked':''} style="width:auto;" onchange="toggleInvestorFields()"> ${t('hasExternalInvestor')}
+      </label>
+    </div>
+    <div id="investorFields" style="display:${site.investor?'block':'none'};">
+      <div class="row2">
+        <div class="field"><label>${t('investorName')}</label><input id="f_invName" value="${site.investor?escapeHtml(site.investor.name):''}"></div>
+        <div class="field"><label>${t('investorPercent')}</label><input id="f_invPct" type="number" step="0.1" value="${site.investor?site.investor.percent:''}"></div>
+      </div>
+    </div>
+    <button class="btn amber" style="width:100%" onclick="submitEditSite('${siteId}')">${t('save')}</button>
+  `);
+}
+async function submitEditSite(siteId){
+  const name = document.getElementById('f_siteName').value.trim();
+  const kafeelPercent = parseFloat(document.getElementById('f_kafeelPct').value)||0;
+  if(!name){ return; }
+  const participants = Array.from(document.querySelectorAll('.f_participant:checked')).map(el=>el.value);
+  if(participants.length===0){ showToast(t('pickAtLeastOne')); return; }
+  const hasInv = document.getElementById('f_hasInvestor').checked;
+  let investor = null;
+  if(hasInv){
+    investor = {
+      name: document.getElementById('f_invName').value.trim(),
+      percent: parseFloat(document.getElementById('f_invPct').value)||0
+    };
+  }
+  await fsUpdateDoc('sites', siteId, {name, kafeelPercent, investor, participants});
+  closeModal();
+  showToast(t('entrySaved'));
+  renderRoute();
+}
+
 // ===================== Site detail =====================
 function viewSiteDetail(siteId){
   const sum = computeSiteSummary(siteId);
   if(!sum) return `<div class="empty">Not found</div>`;
   const { site, expenses, incomeBreakdown, totalExpense, totalDistributable, perPartnerShare } = sum;
   const pendingHere = STATE.entries.filter(e=>e.siteId===siteId && e.status==='pending');
+  const me = STATE.partners.find(p=>p.id===STATE.currentUser);
 
   return `
     <button class="btn ghost small" style="margin-bottom:12px;" onclick="backToSites()">&larr; ${t('backToSites')}</button>
     <div class="section-head">
       <div><h2>${escapeHtml(site.name)}</h2>
       <p>${t('kafeelPercent')}: ${site.kafeelPercent}%${site.investor?(' · '+escapeHtml(site.investor.name)+' — '+site.investor.percent+'%'):''}</p></div>
-      <div style="display:flex; gap:8px;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${me && me.isAdmin ? `<button class="btn ghost small" onclick="openEditSiteModal('${siteId}')">${t('editSite')}</button>` : ''}
         <button class="btn steel small" onclick="openExpenseModal('${siteId}')">+ ${t('addExpense')}</button>
         <button class="btn amber small" onclick="openIncomeModal('${siteId}')">+ ${t('addIncome')}</button>
       </div>
@@ -1242,7 +1285,6 @@ function copySummary(){
     lines.push(`${p.name}: ${t('entitlement')} ${money(entitlement)} | ${t('withdrawn')} ${money(withdrawn)} | ${t('netBalance')} ${money(net)}`);
   });
   lines.push('');
-  lines.push(t('totalLiability')+': '+money(computeTotalCompanyLiability()));
   const text = lines.join('\n');
   if(navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(text).then(()=>showToast(t('copiedMsg'))).catch(()=>showToast(t('copyFailedMsg')));
