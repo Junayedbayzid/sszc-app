@@ -338,6 +338,12 @@ const T = {
     companyNetProfit:'কোম্পানির প্রকৃত নিট লাভ (শুধু তথ্যের জন্য)',
     companyNetProfitNote:'সব সাইটের ইনকাম থেকে সাইট ও সাধারণ — সব খরচ বিয়োগ করে হিসাব করা হয় — পার্টনার ব্যালেন্সে এর কোনো প্রভাব নাই',
     totalLiability:'কোম্পানির মোট দেনা (৪ পার্টনার মিলিয়ে)', totalLiabilityNote:'সাইট খরচ + সাধারণ/অফিস খরচ + লাভের ভাগ — সব মিলিয়ে কোম্পানিকে যা শোধ করতে হবে',
+    participants:'এই সাইটে কারা অংশ নিচ্ছে', participantsNote:'ডিফল্টে সবাই সিলেক্ট করা — কেউ পরে চলে গেলে ভবিষ্যতের সাইটে আনচেক করে দিও, পুরানো সাইটের হিসাব অপরিবর্তিত থাকবে',
+    pickAtLeastOne:'অন্তত একজন পার্টনার বাছাই করো',
+    stageLabel:'ধাপ/মাসের লেবেল (ঐচ্ছিক)', stageLabelPlaceholder:'যেমন: সেপ্টেম্বর বিল, ধাপ ২',
+    addWithdrawal:'উত্তোলন যোগ করো', withdrawalNote:'কেন উত্তোলন করছো (ঐচ্ছিক)',
+    copySummary:'সামারি কপি করো', copiedMsg:'কপি হয়েছে — এখন হোয়াটসঅ্যাপে পেস্ট করো', copyFailedMsg:'কপি করা যায়নি',
+    entitlement:'মোট প্রাপ্য', withdrawn:'উত্তোলিত', netBalance:'বর্তমান ব্যালেন্স',
   },
   en: {
     appName:'SSZC', tagline:'Partnership Ledger',
@@ -376,6 +382,12 @@ const T = {
     companyNetProfit:'Company actual net profit (informational only)',
     companyNetProfitNote:'All site income minus every expense — site-linked and general — does not affect partner balances',
     totalLiability:'Total company debt (all 4 partners combined)', totalLiabilityNote:'Site expenses + general/office expenses + profit shares — total the company owes out',
+    participants:'Who is in on this site', participantsNote:'Everyone is checked by default — if someone leaves later, uncheck them on future sites; past sites stay unchanged',
+    pickAtLeastOne:'Pick at least one partner',
+    stageLabel:'Stage/month label (optional)', stageLabelPlaceholder:'e.g. September bill, Stage 2',
+    addWithdrawal:'Add withdrawal', withdrawalNote:'Reason for withdrawal (optional)',
+    copySummary:'Copy summary', copiedMsg:'Copied — paste it into WhatsApp', copyFailedMsg:'Could not copy',
+    entitlement:'Gross entitlement', withdrawn:'Withdrawn', netBalance:'Net balance',
   }
 };
 function t(key){ return T[STATE.lang][key] || key; }
@@ -428,7 +440,18 @@ function computeSiteSummary(siteId){
     return {entry:inc, gross, kafeelCut, investorCut, net};
   });
 
-  return {site, expenses, incomes, incomeBreakdown, totalExpense, totalDistributable, perPartnerShare: totalDistributable/4};
+  // Who shares in this site's profit — defaults to everyone if the site predates
+  // the participants feature.
+  const participants = (site.participants && site.participants.length) ? site.participants : STATE.partners.map(p=>p.id);
+
+  // Expenses are subtracted from the pool FIRST, then what remains splits equally.
+  // Whoever personally fronted an expense gets that amount credited back to them
+  // on top of their equal share — so the total handed out always equals exactly
+  // totalDistributable, never more.
+  const netPool = totalDistributable - totalExpense;
+  const perPartnerShare = participants.length ? netPool / participants.length : 0;
+
+  return {site, expenses, incomes, incomeBreakdown, totalExpense, totalDistributable, netPool, participants, perPartnerShare};
 }
 
 // General / office expenses not tied to any site yet (siteId is null)
@@ -464,9 +487,10 @@ function computePartnerBalances(){
     sum.expenses.forEach(e=>{
       if(balances[e.paidBy] !== undefined) balances[e.paidBy] += Number(e.amount||0);
     });
-    // credit: equal profit share per approved income entry
-    sum.incomeBreakdown.forEach(ib=>{
-      STATE.partners.forEach(p=>{ balances[p.id] += ib.net/4; });
+    // credit: equal share of the pool AFTER expenses are already subtracted —
+    // only among this site's participants, so total paid out per site == totalDistributable exactly
+    sum.participants.forEach(pid=>{
+      if(balances[pid] !== undefined) balances[pid] += sum.perPartnerShare;
     });
   });
   // credit: general/office expenses (not yet linked to a site) — still owed back to whoever paid
@@ -478,6 +502,16 @@ function computePartnerBalances(){
     if(balances[w.paidBy] !== undefined) balances[w.paidBy] -= Number(w.amount||0);
   });
   return balances;
+}
+
+function computeWithdrawn(partnerId){
+  return STATE.entries.filter(e=>e.type==='withdrawal' && e.status==='approved' && e.paidBy===partnerId)
+    .reduce((s,e)=>s+Number(e.amount||0),0);
+}
+// "Gross entitlement" = current balance + whatever they've already withdrawn —
+// i.e. the total they've earned/are owed before any withdrawals came out of it.
+function computeGrossEntitlement(partnerId, balances){
+  return (balances[partnerId]||0) + computeWithdrawn(partnerId);
 }
 
 // Total cash the company must eventually pay out across all 4 partners combined —
@@ -516,7 +550,7 @@ function confirmRemovePartner(id){
   });
 }
 async function addSite(data){
-  const s = {id:uid(), name:data.name, kafeelPercent:data.kafeelPercent, investor:data.investor||null, createdAt:Date.now(), createdBy:STATE.currentUser};
+  const s = {id:uid(), name:data.name, kafeelPercent:data.kafeelPercent, investor:data.investor||null, participants:data.participants||STATE.partners.map(p=>p.id), createdAt:Date.now(), createdBy:STATE.currentUser};
   await fsSetDoc('sites', s.id, s);
   return s;
 }
@@ -704,11 +738,14 @@ function viewDashboard(){
   const myBal = balances[STATE.currentUser] || 0;
   const gen = computeGeneralSummary();
   return `
-    <div class="section-head"><div><h2>${t('dashboard')}</h2></div></div>
+    <div class="section-head"><div><h2>${t('dashboard')}</h2></div>
+      <button class="btn steel small" onclick="copySummary()">📋 ${t('copySummary')}</button>
+    </div>
     <div class="stat-grid">
       <div class="stat ${myBal<0?'neg':'pos'}">
         <div class="label">${t('yourBalance')}</div>
         <div class="value">${money(myBal)}</div>
+        <div style="font-size:11px; color:var(--steel-deep); font-weight:700; margin-top:4px; cursor:pointer;" onclick="openWithdrawalModal()">+ ${t('addWithdrawal')}</div>
       </div>
       <div class="stat">
         <div class="label">${t('totalSites')}</div>
@@ -767,13 +804,20 @@ function viewDashboard(){
     <div class="card" style="margin-top:16px;">
       <div class="card-title">${t('partnerBalances')}</div>
       <table>
-        <thead><tr><th>${t('name')}</th><th style="text-align:right">${t('combinedBalance')}</th></tr></thead>
+        <thead><tr><th>${t('name')}</th><th style="text-align:right">${t('entitlement')}</th><th style="text-align:right">${t('withdrawn')}</th><th style="text-align:right">${t('netBalance')}</th></tr></thead>
         <tbody>
-          ${STATE.partners.map(p=>`
+          ${STATE.partners.map(p=>{
+            const entitlement = computeGrossEntitlement(p.id, balances);
+            const withdrawn = computeWithdrawn(p.id);
+            const net = balances[p.id]||0;
+            return `
             <tr>
               <td>${escapeHtml(p.name)}${p.isAdmin?' <span class="pill approved">'+t('isAdmin')+'</span>':''}</td>
-              <td class="num-cell ${balances[p.id]<0?'neg-text':'pos-text'}">${money(balances[p.id]||0)}</td>
-            </tr>`).join('')}
+              <td class="num-cell">${money(entitlement)}</td>
+              <td class="num-cell">${money(withdrawn)}</td>
+              <td class="num-cell ${net<0?'neg-text':'pos-text'}">${money(net)}</td>
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>
     </div>
@@ -898,6 +942,7 @@ async function submitEditExpense(entryId){
 function openEditIncomeModal(e){
   openModal(`
     <div class="modal-head"><h3>${t('edit')} — ${t('addIncome')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <div class="field"><label>${t('stageLabel')}</label><input id="f_stage" value="${escapeHtml(e.stage||'')}" placeholder="${t('stageLabelPlaceholder')}"></div>
     <div class="field"><label>${t('revenue')}</label><input id="f_rev" type="number" step="0.01" value="${e.revenue}"></div>
     <div class="field"><label>${t('workerSalary')}</label><input id="f_wsal" type="number" step="0.01" value="${e.workerSalary||0}"></div>
     <div class="field"><label>${t('description')}</label><input id="f_idesc" value="${escapeHtml(e.description||'')}"></div>
@@ -905,11 +950,12 @@ function openEditIncomeModal(e){
   `);
 }
 async function submitEditIncome(entryId){
+  const stage = document.getElementById('f_stage').value.trim();
   const revenue = parseFloat(document.getElementById('f_rev').value);
   const workerSalary = parseFloat(document.getElementById('f_wsal').value)||0;
   const description = document.getElementById('f_idesc').value.trim();
   if(!revenue || revenue<=0){ showToast('Revenue?'); return; }
-  await fsUpdateDoc('entries', entryId, {revenue, workerSalary, description});
+  await fsUpdateDoc('entries', entryId, {stage, revenue, workerSalary, description});
   closeModal();
   showToast(t('entrySaved'));
   renderRoute();
@@ -923,6 +969,15 @@ function openNewSiteModal(){
     <div class="modal-head"><h3>${t('newSite')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
     <div class="field"><label>${t('siteName')}</label><input id="f_siteName" placeholder="Site A"></div>
     <div class="field"><label>${t('kafeelPercent')}</label><input id="f_kafeelPct" type="number" step="0.1" placeholder="5"></div>
+    <div class="field">
+      <label>${t('participants')}</label>
+      <div style="font-size:11.5px; color:var(--ink-soft); margin-bottom:6px;">${t('participantsNote')}</div>
+      ${STATE.partners.map(p=>`
+        <label style="display:flex; align-items:center; gap:8px; padding:6px 0;">
+          <input type="checkbox" class="f_participant" value="${p.id}" checked style="width:auto;"> ${escapeHtml(p.name)}
+        </label>
+      `).join('')}
+    </div>
     <div class="field">
       <label style="display:flex; align-items:center; gap:8px;">
         <input type="checkbox" id="f_hasInvestor" style="width:auto;" onchange="toggleInvestorFields()"> ${t('hasExternalInvestor')}
@@ -945,6 +1000,8 @@ async function submitNewSite(){
   const name = document.getElementById('f_siteName').value.trim();
   const kp = parseFloat(document.getElementById('f_kafeelPct').value)||0;
   if(!name){ return; }
+  const participants = Array.from(document.querySelectorAll('.f_participant:checked')).map(el=>el.value);
+  if(participants.length===0){ showToast(t('pickAtLeastOne')); return; }
   const hasInv = document.getElementById('f_hasInvestor').checked;
   let investor = null;
   if(hasInv){
@@ -953,7 +1010,7 @@ async function submitNewSite(){
       percent: parseFloat(document.getElementById('f_invPct').value)||0
     };
   }
-  await addSite({name, kafeelPercent:kp, investor});
+  await addSite({name, kafeelPercent:kp, investor, participants});
   closeModal();
   showToast(t('siteCreated'));
   renderRoute();
@@ -980,8 +1037,13 @@ function viewSiteDetail(siteId){
     <div class="stat-grid">
       <div class="stat neg"><div class="label">${t('totalExpense')}</div><div class="value">${money(totalExpense)}</div></div>
       <div class="stat pos"><div class="label">${t('totalDistributable')}</div><div class="value">${money(totalDistributable)}</div></div>
-      <div class="stat"><div class="label">${t('perPartnerShare')}</div><div class="value">${money(perPartnerShare)}</div></div>
+      <div class="stat">
+        <div class="label">${t('perPartnerShare')}</div>
+        <div class="value">${money(perPartnerShare)}</div>
+        <div style="font-size:10.5px; color:var(--ink-soft); margin-top:4px;">${money(totalDistributable)} − ${money(totalExpense)} = ${money(totalDistributable-totalExpense)} ÷ ${sum.participants.length}</div>
+      </div>
     </div>
+    <div style="font-size:11.5px; color:var(--ink-soft); margin:-8px 0 14px;">${t('participants')}: ${sum.participants.map(pid=>escapeHtml(partnerName(pid))).join(', ')}</div>
 
     ${pendingHere.length>0 ? `
     <div class="card" style="border-left:4px solid var(--amber);">
@@ -1014,7 +1076,7 @@ function viewSiteDetail(siteId){
         <tbody>
           ${incomeBreakdown.map(ib=>`
             <tr>
-              <td>${money(ib.entry.revenue)}<div style="font-size:11px;color:var(--ink-soft);">${fmtDate(ib.entry.createdAt)}</div></td>
+              <td>${ib.entry.stage?`<div style="font-weight:700; font-size:12px; color:var(--steel-deep);">${escapeHtml(ib.entry.stage)}</div>`:''}${money(ib.entry.revenue)}<div style="font-size:11px;color:var(--ink-soft);">${fmtDate(ib.entry.createdAt)}</div></td>
               <td>${money(ib.gross)}</td>
               <td>${money(ib.kafeelCut)}</td>
               ${site.investor?('<td>'+money(ib.investorCut)+'</td>'):''}
@@ -1109,6 +1171,7 @@ async function submitExpense(siteId){
 function openIncomeModal(siteId){
   openModal(`
     <div class="modal-head"><h3>${t('addIncome')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <div class="field"><label>${t('stageLabel')}</label><input id="f_stage" placeholder="${t('stageLabelPlaceholder')}"></div>
     <div class="field"><label>${t('revenue')}</label><input id="f_rev" type="number" step="0.01"></div>
     <div class="field"><label>${t('workerSalary')}</label><input id="f_wsal" type="number" step="0.01"></div>
     <div class="field"><label>${t('description')}</label><input id="f_idesc"></div>
@@ -1118,16 +1181,68 @@ function openIncomeModal(siteId){
   `);
 }
 async function submitIncome(siteId){
+  const stage = document.getElementById('f_stage').value.trim();
   const revenue = parseFloat(document.getElementById('f_rev').value);
   const workerSalary = parseFloat(document.getElementById('f_wsal').value)||0;
   const description = document.getElementById('f_idesc').value.trim();
   if(!revenue || revenue<=0){ showToast('Revenue?'); return; }
   if(!_pendingReceipt){ document.getElementById('receiptRequiredNote').style.display='block'; return; }
-  await addEntry({siteId, type:'income', revenue, workerSalary, description, receipt:_pendingReceipt});
+  await addEntry({siteId, type:'income', stage, revenue, workerSalary, description, receipt:_pendingReceipt});
   _pendingReceipt = null;
   closeModal();
   showToast(t('entrySaved'));
   renderRoute();
+}
+
+// ===================== Withdrawals =====================
+function openWithdrawalModal(){
+  const me = STATE.partners.find(p=>p.id===STATE.currentUser);
+  const canPickAnyone = me && me.isAdmin;
+  openModal(`
+    <div class="modal-head"><h3>${t('addWithdrawal')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    ${canPickAnyone ? `
+    <div class="field"><label>${t('paidBy')}</label>
+      <select id="f_wPartner">${STATE.partners.map(p=>`<option value="${p.id}" ${p.id===STATE.currentUser?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>
+    </div>` : ''}
+    <div class="field"><label>${t('amount')}</label><input id="f_wAmt" type="number" step="0.01"></div>
+    <div class="field"><label>${t('description')}</label><input id="f_wDesc" placeholder="${t('withdrawalNote')}"></div>
+    <button class="btn amber" style="width:100%;" onclick="submitWithdrawal()">${t('submit')}</button>
+  `);
+}
+async function submitWithdrawal(){
+  const me = STATE.partners.find(p=>p.id===STATE.currentUser);
+  const canPickAnyone = me && me.isAdmin;
+  const paidBy = canPickAnyone ? document.getElementById('f_wPartner').value : STATE.currentUser;
+  const amount = parseFloat(document.getElementById('f_wAmt').value);
+  const description = document.getElementById('f_wDesc').value.trim();
+  if(!amount || amount<=0){ showToast('Amount?'); return; }
+  await addEntry({siteId:null, type:'withdrawal', amount, description, paidBy});
+  closeModal();
+  showToast(t('entrySaved'));
+  renderRoute();
+}
+
+// ===================== Copy summary =====================
+function copySummary(){
+  const balances = computePartnerBalances();
+  let lines = [];
+  lines.push('SSZC — ' + t('partnerBalances'));
+  lines.push(new Date().toLocaleDateString(STATE.lang==='bn'?'bn-BD':'en-US'));
+  lines.push('');
+  STATE.partners.forEach(p=>{
+    const entitlement = computeGrossEntitlement(p.id, balances);
+    const withdrawn = computeWithdrawn(p.id);
+    const net = balances[p.id]||0;
+    lines.push(`${p.name}: ${t('entitlement')} ${money(entitlement)} | ${t('withdrawn')} ${money(withdrawn)} | ${t('netBalance')} ${money(net)}`);
+  });
+  lines.push('');
+  lines.push(t('totalLiability')+': '+money(computeTotalCompanyLiability()));
+  const text = lines.join('\n');
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(()=>showToast(t('copiedMsg'))).catch(()=>showToast(t('copyFailedMsg')));
+  } else {
+    showToast(t('copyFailedMsg'));
+  }
 }
 
 // ===================== Approvals =====================
