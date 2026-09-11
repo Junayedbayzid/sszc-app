@@ -340,6 +340,8 @@ const T = {
     totalLiability:'কোম্পানির মোট দেনা (৪ পার্টনার মিলিয়ে)', totalLiabilityNote:'সাইট খরচ + সাধারণ/অফিস খরচ + লাভের ভাগ — সব মিলিয়ে কোম্পানিকে যা শোধ করতে হবে',
     participants:'এই সাইটে কারা অংশ নিচ্ছে', participantsNote:'ডিফল্টে সবাই সিলেক্ট করা — কেউ পরে চলে গেলে ভবিষ্যতের সাইটে আনচেক করে দিও, পুরানো সাইটের হিসাব অপরিবর্তিত থাকবে',
     pickAtLeastOne:'অন্তত একজন পার্টনার বাছাই করো',
+    editSite:'এডিট সাইট', participantsEditNote:'কারো টিক তুলে দিলে ভবিষ্যতের লাভ-বণ্টন থেকে সে বাদ যাবে — আগের এন্ট্রিগুলার হিসাব বদলে যাবে, তাই নতুন ধাপ/সাইট থেকে বাদ দেওয়াই ভালো',
+    confirmLogout:'তুমি কি সত্যিই লগআউট করতে চাও?',
     stageLabel:'ধাপ/মাসের লেবেল (ঐচ্ছিক)', stageLabelPlaceholder:'যেমন: সেপ্টেম্বর বিল, ধাপ ২',
     addWithdrawal:'উত্তোলন যোগ করো', withdrawalNote:'কেন উত্তোলন করছো (ঐচ্ছিক)',
     copySummary:'সামারি কপি করো', copiedMsg:'কপি হয়েছে — এখন হোয়াটসঅ্যাপে পেস্ট করো', copyFailedMsg:'কপি করা যায়নি',
@@ -384,6 +386,8 @@ const T = {
     totalLiability:'Total company debt (all 4 partners combined)', totalLiabilityNote:'Site expenses + general/office expenses + profit shares — total the company owes out',
     participants:'Who is in on this site', participantsNote:'Everyone is checked by default — if someone leaves later, uncheck them on future sites; past sites stay unchanged',
     pickAtLeastOne:'Pick at least one partner',
+    editSite:'Edit site', participantsEditNote:'Unchecking someone removes them from future profit splits on this site — past entries stay as they were, so it is cleaner to drop them starting from a new site/stage instead',
+    confirmLogout:'Are you sure you want to log out?',
     stageLabel:'Stage/month label (optional)', stageLabelPlaceholder:'e.g. September bill, Stage 2',
     addWithdrawal:'Add withdrawal', withdrawalNote:'Reason for withdrawal (optional)',
     copySummary:'Copy summary', copiedMsg:'Copied — paste it into WhatsApp', copyFailedMsg:'Could not copy',
@@ -442,7 +446,12 @@ function computeSiteSummary(siteId){
 
   // Who shares in this site's profit — defaults to everyone if the site predates
   // the participants feature.
-  const participants = (site.participants && site.participants.length) ? site.participants : STATE.partners.map(p=>p.id);
+  // Filter to partners who still actually exist — if someone was deleted from
+  // Settings entirely, their locked-in share on old sites redistributes among
+  // whoever's left instead of silently disappearing.
+  const existingIds = new Set(STATE.partners.map(p=>p.id));
+  const rawParticipants = (site.participants && site.participants.length) ? site.participants : STATE.partners.map(p=>p.id);
+  const participants = rawParticipants.filter(pid=>existingIds.has(pid));
 
   // Expenses are subtracted from the pool FIRST, then what remains splits equally.
   // Whoever personally fronted an expense gets that amount credited back to them
@@ -687,7 +696,7 @@ function renderMain(){
         </div>
         ${me ? `
         <div class="who"><b>${escapeHtml(me.name)}</b>${me.isAdmin?('· '+t('isAdmin')):''}</div>
-        <button class="logout-btn" onclick="doLogout()">${t('logout')}</button>` : ''}
+        <button class="logout-btn" onclick="confirmLogout()">${t('logout')}</button>` : ''}
       </div>
     </div>
     <div class="body-wrap">
@@ -714,6 +723,9 @@ function renderMain(){
   renderRoute();
 }
 function setLang(l){ STATE.lang = l; localStorage_safe_set('sszc_lang', l); render(); }
+function confirmLogout(){
+  openConfirmModal(t('confirmLogout'), t('logout'), ()=>{ doLogout(); });
+}
 function doLogout(){
   STATE.currentUser = null;
   STATE.route='dashboard';
@@ -1121,11 +1133,12 @@ function viewSiteDetail(siteId){
       <div class="card-title">${t('incomeEntries')}</div>
       ${incomeBreakdown.length===0 ? `<div class="empty" style="padding:16px;">—</div>` : `
       <table>
-        <thead><tr><th>${t('revenue')}</th><th>${t('grossProfit')}</th><th>${t('kafeelCut')}</th>${site.investor?('<th>'+t('investorCut')+'</th>'):''}<th style="text-align:right">${t('netDistributable')}</th><th></th></tr></thead>
+        <thead><tr><th>${t('revenue')}</th><th>${t('workerSalary')}</th><th>${t('grossProfit')}</th><th>${t('kafeelCut')}</th>${site.investor?('<th>'+t('investorCut')+'</th>'):''}<th style="text-align:right">${t('netDistributable')}</th><th></th></tr></thead>
         <tbody>
           ${incomeBreakdown.map(ib=>`
             <tr>
               <td>${ib.entry.stage?`<div style="font-weight:700; font-size:12px; color:var(--steel-deep);">${escapeHtml(ib.entry.stage)}</div>`:''}${money(ib.entry.revenue)}<div style="font-size:11px;color:var(--ink-soft);">${fmtDate(ib.entry.createdAt)}</div></td>
+              <td>${money(ib.entry.workerSalary||0)}</td>
               <td>${money(ib.gross)}</td>
               <td>${money(ib.kafeelCut)}</td>
               ${site.investor?('<td>'+money(ib.investorCut)+'</td>'):''}
