@@ -641,6 +641,7 @@ function doLogin(){
     STATE.currentUser = p.id;
     STATE.route = 'dashboard';
     _loginPickId = null;
+    try{ localStorage.setItem('sszc_session', p.id); }catch(e){}
     render();
   } else {
     document.getElementById('loginError').textContent = t('wrongPin');
@@ -713,7 +714,12 @@ function renderMain(){
   renderRoute();
 }
 function setLang(l){ STATE.lang = l; localStorage_safe_set('sszc_lang', l); render(); }
-function doLogout(){ STATE.currentUser = null; STATE.route='dashboard'; render(); }
+function doLogout(){
+  STATE.currentUser = null;
+  STATE.route='dashboard';
+  try{ localStorage.removeItem('sszc_session'); }catch(e){}
+  render();
+}
 function goRoute(r){ STATE.route = r; STATE.activeSiteId=null; render(); }
 
 function renderRoute(){
@@ -1369,7 +1375,16 @@ async function init(){
   fsListen('sites', 'sites');
   fsListen('entries', 'entries');
   // give the first snapshot a moment to arrive before first render
-  setTimeout(()=>{ STATE.loading = false; render(); }, 600);
+  setTimeout(()=>{
+    STATE.loading = false;
+    try{
+      const savedId = localStorage.getItem('sszc_session');
+      if(savedId && STATE.partners.some(p=>p.id===savedId)){
+        STATE.currentUser = savedId;
+      }
+    }catch(e){}
+    render();
+  }, 600);
 
   if('serviceWorker' in navigator){
     navigator.serviceWorker.register('sw.js').catch(err=>console.error('sw failed', err));
