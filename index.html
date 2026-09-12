@@ -282,6 +282,64 @@ function fsListen(collectionName, targetArrayKey){
   });
 }
 
+// ===================== Security / audit log =====================
+// A persistent random ID per browser+device (survives across logins/logouts,
+// only changes if someone clears site data or uses a different browser/device).
+function getDeviceId(){
+  try{
+    let id = localStorage.getItem('sszc_device_id');
+    if(!id){
+      id = 'dev_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('sszc_device_id', id);
+    }
+    return id;
+  }catch(e){ return 'dev_unknown'; }
+}
+function parseDeviceLabel(ua){
+  ua = ua || '';
+  let os = 'Unknown OS';
+  if(/android/i.test(ua)) os = 'Android';
+  else if(/iphone|ipad|ipod/i.test(ua)) os = 'iOS';
+  else if(/windows/i.test(ua)) os = 'Windows';
+  else if(/mac os/i.test(ua)) os = 'Mac';
+  else if(/linux/i.test(ua)) os = 'Linux';
+  let browser = 'Unknown browser';
+  if(/edg\//i.test(ua)) browser = 'Edge';
+  else if(/chrome\//i.test(ua)) browser = 'Chrome';
+  else if(/firefox\//i.test(ua)) browser = 'Firefox';
+  else if(/safari\//i.test(ua)) browser = 'Safari';
+  return os + ' · ' + browser;
+}
+let _cachedIP = null;
+async function getIP(){
+  if(_cachedIP) return _cachedIP;
+  try{
+    const res = await fetch('https://api.ipify.org?format=json');
+    const data = await res.json();
+    _cachedIP = data.ip;
+    return _cachedIP;
+  }catch(e){ return null; }
+}
+// Fire-and-forget audit entry — never blocks or breaks the calling action if it fails.
+async function logAudit(action, partnerId, extra){
+  try{
+    const ip = await getIP();
+    const doc = {
+      id: uid(),
+      action,
+      partnerId: partnerId || null,
+      partnerName: partnerId ? partnerName(partnerId) : null,
+      deviceId: getDeviceId(),
+      deviceLabel: parseDeviceLabel(navigator.userAgent),
+      userAgent: navigator.userAgent,
+      ip: ip || null,
+      createdAt: Date.now(),
+      extra: extra || null
+    };
+    await fsSetDoc('auditLog', doc.id, doc);
+  }catch(e){ console.error('audit log failed', e); }
+}
+
 // artifacts can't use localStorage — keep a tiny in-memory shim so lang toggle
 // doesn't crash if called before app init; not used for persistence of real data.
 let _memLang = null;
@@ -294,6 +352,7 @@ let STATE = {
   partners: [],
   sites: [],
   entries: [],
+  auditLog: [],
   currentUser: null, // partner id
   route: 'dashboard',
   activeSiteId: null,
@@ -343,6 +402,11 @@ const T = {
     editSite:'এডিট সাইট', participantsEditNote:'কারো টিক তুলে দিলে ভবিষ্যতের লাভ-বণ্টন থেকে সে বাদ যাবে — আগের এন্ট্রিগুলার হিসাব বদলে যাবে, তাই নতুন ধাপ/সাইট থেকে বাদ দেওয়াই ভালো',
     confirmLogout:'তুমি কি সত্যিই লগআউট করতে চাও?',
     changePin:'পিন বদলাও', newPin:'নতুন পিন', confirmPin:'পিন আবার লিখো', pinMismatch:'দুইটা পিন মিলছে না', pinChangedMsg:'পিন বদলে গেছে',
+    deleteSite:'সাইট মুছে ফেলো', confirmDeleteSite:'"{name}" সাইটটা মুছে ফেলতে চাও? এর সব খরচ ও ইনকাম এন্ট্রিও একসাথে মুছে যাবে — এটা আর ফিরিয়ে আনা যাবে না।',
+    withdrawalHistory:'উত্তোলনের হিস্ট্রি',
+    securityLog:'সিকিউরিটি লগ', securityLogNote:'কোন ডিভাইস থেকে কে লগইন করেছে বা এন্ট্রি দিয়েছে তার হিস্ট্রি — সন্দেহজনক কিছু দেখলে সাথে সাথে সবার পিন বদলে দাও',
+    deviceIdLabel:'ডিভাইস আইডি',
+    logLogin:'লগইন হয়েছে', logFailedLogin:'ভুল পিন দিয়ে লগইনের চেষ্টা', logSubmitEntry:'এন্ট্রি সাবমিট হয়েছে', logApproveEntry:'এন্ট্রি অ্যাপ্রুভ হয়েছে', logRejectEntry:'এন্ট্রি বাতিল হয়েছে',
     stageLabel:'ধাপ/মাসের লেবেল (ঐচ্ছিক)', stageLabelPlaceholder:'যেমন: সেপ্টেম্বর বিল, ধাপ ২',
     addWithdrawal:'উত্তোলন যোগ করো', withdrawalNote:'কেন উত্তোলন করছো (ঐচ্ছিক)',
     copySummary:'সামারি কপি করো', copiedMsg:'কপি হয়েছে — এখন হোয়াটসঅ্যাপে পেস্ট করো', copyFailedMsg:'কপি করা যায়নি',
@@ -390,6 +454,11 @@ const T = {
     editSite:'Edit site', participantsEditNote:'Unchecking someone removes them from future profit splits on this site — past entries stay as they were, so it is cleaner to drop them starting from a new site/stage instead',
     confirmLogout:'Are you sure you want to log out?',
     changePin:'Change PIN', newPin:'New PIN', confirmPin:'Re-enter PIN', pinMismatch:'The two PINs do not match', pinChangedMsg:'PIN changed',
+    deleteSite:'Delete site', confirmDeleteSite:'Delete "{name}"? All its expense and income entries will be deleted too — this cannot be undone.',
+    withdrawalHistory:'Withdrawal history',
+    securityLog:'Security log', securityLogNote:'Who logged in or submitted entries from which device — if anything looks suspicious, change everyone\u2019s PIN immediately',
+    deviceIdLabel:'Device ID',
+    logLogin:'Logged in', logFailedLogin:'Wrong-PIN login attempt', logSubmitEntry:'Entry submitted', logApproveEntry:'Entry approved', logRejectEntry:'Entry rejected',
     stageLabel:'Stage/month label (optional)', stageLabelPlaceholder:'e.g. September bill, Stage 2',
     addWithdrawal:'Add withdrawal', withdrawalNote:'Reason for withdrawal (optional)',
     copySummary:'Copy summary', copiedMsg:'Copied — paste it into WhatsApp', copyFailedMsg:'Could not copy',
@@ -566,12 +635,14 @@ async function addSite(data){
   return s;
 }
 async function addEntry(entry){
-  const e = Object.assign({id:uid(), status:'pending', submittedBy:STATE.currentUser, createdAt:Date.now()}, entry);
+  const e = Object.assign({id:uid(), status:'pending', submittedBy:STATE.currentUser, submittedDeviceId:getDeviceId(), createdAt:Date.now()}, entry);
   await fsSetDoc('entries', e.id, e);
+  logAudit('submit_entry', STATE.currentUser, {entryId:e.id, entryType:e.type, amount:e.amount||null});
   return e;
 }
 async function setEntryStatus(entryId, status){
-  await fsUpdateDoc('entries', entryId, {status, approvedBy:STATE.currentUser, approvedAt:Date.now()});
+  await fsUpdateDoc('entries', entryId, {status, approvedBy:STATE.currentUser, approvedAt:Date.now(), approvedDeviceId:getDeviceId()});
+  logAudit(status==='approved'?'approve_entry':'reject_entry', STATE.currentUser, {entryId});
 }
 
 // ===================== Render root =====================
@@ -653,9 +724,11 @@ function doLogin(){
     STATE.route = 'dashboard';
     _loginPickId = null;
     try{ localStorage.setItem('sszc_session', p.id); }catch(e){}
+    logAudit('login', p.id);
     render();
   } else {
     document.getElementById('loginError').textContent = t('wrongPin');
+    logAudit('failed_login', p ? p.id : null, {attemptedName: p ? p.name : null});
   }
 }
 function goFirstSetup(){
@@ -831,6 +904,27 @@ function viewDashboard(){
         </tbody>
       </table>
     </div>
+
+    ${(()=>{
+      const withdrawals = STATE.entries.filter(e=>e.type==='withdrawal' && e.status!=='rejected').sort((a,b)=>b.createdAt-a.createdAt);
+      if(withdrawals.length===0) return '';
+      return `
+      <div class="card" style="margin-top:16px;">
+        <div class="card-title">${t('withdrawalHistory')}</div>
+        ${withdrawals.map(w=>`
+          <div class="flex-between" style="padding:9px 0; border-bottom:1px solid var(--line);">
+            <div>
+              <div style="font-weight:700; font-size:13.5px;">${escapeHtml(partnerName(w.paidBy))} — ${money(w.amount)} ${w.status==='pending'?`<span class="pill pending">${t('pending')}</span>`:''}</div>
+              <div style="font-size:11.5px; color:var(--ink-soft); margin-top:2px;">${escapeHtml(w.description||'')} · ${fmtDate(w.createdAt)}</div>
+            </div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              ${canDeleteEntry(w) ? `<button class="btn ghost small" onclick="editEntry('${w.id}')">${t('edit')}</button>` : ''}
+              ${canDeleteEntry(w) ? `<button class="btn danger small" onclick="deleteEntry('${w.id}')">${t('remove')}</button>` : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>`;
+    })()}
   `;
 }
 
@@ -927,6 +1021,34 @@ function editEntry(entryId){
   if(!e || !canDeleteEntry(e)) return; // same permission rule as delete
   if(e.type==='expense') openEditExpenseModal(e);
   else if(e.type==='income') openEditIncomeModal(e);
+  else if(e.type==='withdrawal') openEditWithdrawalModal(e);
+}
+function openEditWithdrawalModal(e){
+  const me = STATE.partners.find(p=>p.id===STATE.currentUser);
+  const canPickAnyone = me && me.isAdmin;
+  openModal(`
+    <div class="modal-head"><h3>${t('edit')} — ${t('addWithdrawal')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    ${canPickAnyone ? `
+    <div class="field"><label>${t('paidBy')}</label>
+      <select id="f_wPartner">${STATE.partners.map(p=>`<option value="${p.id}" ${p.id===e.paidBy?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>
+    </div>` : ''}
+    <div class="field"><label>${t('amount')}</label><input id="f_wAmt" type="number" step="0.01" value="${e.amount}"></div>
+    <div class="field"><label>${t('description')}</label><input id="f_wDesc" value="${escapeHtml(e.description||'')}"></div>
+    <button class="btn amber" style="width:100%;" onclick="submitEditWithdrawal('${e.id}')">${t('save')}</button>
+  `);
+}
+async function submitEditWithdrawal(entryId){
+  const me = STATE.partners.find(p=>p.id===STATE.currentUser);
+  const canPickAnyone = me && me.isAdmin;
+  const existing = STATE.entries.find(x=>x.id===entryId);
+  const paidBy = canPickAnyone ? document.getElementById('f_wPartner').value : existing.paidBy;
+  const amount = parseFloat(document.getElementById('f_wAmt').value);
+  const description = document.getElementById('f_wDesc').value.trim();
+  if(!amount || amount<=0){ showToast('Amount?'); return; }
+  await fsUpdateDoc('entries', entryId, {amount, description, paidBy});
+  closeModal();
+  showToast(t('entrySaved'));
+  renderRoute();
 }
 function openEditExpenseModal(e){
   openModal(`
@@ -1055,6 +1177,8 @@ function openEditSiteModal(siteId){
       </div>
     </div>
     <button class="btn amber" style="width:100%" onclick="submitEditSite('${siteId}')">${t('save')}</button>
+    <div class="divider"></div>
+    <button class="btn danger" style="width:100%" onclick="confirmDeleteSite('${siteId}')">${t('deleteSite')}</button>
   `);
 }
 async function submitEditSite(siteId){
@@ -1075,6 +1199,17 @@ async function submitEditSite(siteId){
   closeModal();
   showToast(t('entrySaved'));
   renderRoute();
+}
+function confirmDeleteSite(siteId){
+  const site = STATE.sites.find(s=>s.id===siteId);
+  openConfirmModal(t('confirmDeleteSite').replace('{name}', site?site.name:''), t('deleteSite'), async ()=>{
+    const relatedEntries = STATE.entries.filter(e=>e.siteId===siteId);
+    await Promise.all(relatedEntries.map(e=>fsDeleteDoc('entries', e.id)));
+    await fsDeleteDoc('sites', siteId);
+    STATE.activeSiteId = null;
+    showToast(t('deletedMsg'));
+    goRoute('sites');
+  });
 }
 
 // ===================== Site detail =====================
@@ -1379,6 +1514,34 @@ function viewSettings(){
     </div>
     ${isFirstRun && STATE.partners.length>0 ? `
     <button class="btn steel" style="width:100%;" onclick="finishFirstSetup()">${t('login')} &rarr;</button>` : ''}
+
+    ${canManage && !isFirstRun ? viewSecurityLog() : ''}
+  `;
+}
+function viewSecurityLog(){
+  const events = (STATE.auditLog||[]).slice().sort((a,b)=>b.createdAt-a.createdAt).slice(0,40);
+  const actionLabel = (a)=>({
+    login: t('logLogin'), failed_login: t('logFailedLogin'),
+    submit_entry: t('logSubmitEntry'), approve_entry: t('logApproveEntry'), reject_entry: t('logRejectEntry')
+  }[a] || a);
+  return `
+    <div class="section-head" style="margin-top:24px;"><div><h3 style="font-size:15px;">${t('securityLog')}</h3><p>${t('securityLogNote')}</p></div></div>
+    ${events.length===0 ? `<div class="empty">—</div>` : `
+    <div class="card">
+      ${events.map(ev=>`
+        <div style="padding:8px 0; border-bottom:1px solid var(--line);">
+          <div class="flex-between">
+            <div style="font-weight:700; font-size:13px; ${ev.action==='failed_login'?'color:var(--brick);':''}">
+              ${ev.action==='failed_login' ? '⚠️ ' : ''}${actionLabel(ev.action)}${ev.partnerName?' — '+escapeHtml(ev.partnerName):''}
+            </div>
+            <div style="font-size:11px; color:var(--ink-soft); white-space:nowrap;">${new Date(ev.createdAt).toLocaleString(STATE.lang==='bn'?'bn-BD':'en-US')}</div>
+          </div>
+          <div style="font-size:11px; color:var(--ink-soft); margin-top:2px;">
+            ${escapeHtml(ev.deviceLabel||'')} · ${t('deviceIdLabel')}: ${escapeHtml((ev.deviceId||'').slice(-8))}${ev.ip?' · IP: '+escapeHtml(ev.ip):''}
+          </div>
+        </div>
+      `).join('')}
+    </div>`}
   `;
 }
 function attachSettingsHandlers(){ /* using inline onclick, nothing extra needed */ }
@@ -1454,6 +1617,7 @@ async function init(){
   fsListen('partners', 'partners');
   fsListen('sites', 'sites');
   fsListen('entries', 'entries');
+  fsListen('auditLog', 'auditLog');
   // give the first snapshot a moment to arrive before first render
   setTimeout(()=>{
     STATE.loading = false;
