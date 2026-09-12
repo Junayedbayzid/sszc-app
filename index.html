@@ -342,6 +342,7 @@ const T = {
     pickAtLeastOne:'অন্তত একজন পার্টনার বাছাই করো',
     editSite:'এডিট সাইট', participantsEditNote:'কারো টিক তুলে দিলে ভবিষ্যতের লাভ-বণ্টন থেকে সে বাদ যাবে — আগের এন্ট্রিগুলার হিসাব বদলে যাবে, তাই নতুন ধাপ/সাইট থেকে বাদ দেওয়াই ভালো',
     confirmLogout:'তুমি কি সত্যিই লগআউট করতে চাও?',
+    changePin:'পিন বদলাও', newPin:'নতুন পিন', confirmPin:'পিন আবার লিখো', pinMismatch:'দুইটা পিন মিলছে না', pinChangedMsg:'পিন বদলে গেছে',
     stageLabel:'ধাপ/মাসের লেবেল (ঐচ্ছিক)', stageLabelPlaceholder:'যেমন: সেপ্টেম্বর বিল, ধাপ ২',
     addWithdrawal:'উত্তোলন যোগ করো', withdrawalNote:'কেন উত্তোলন করছো (ঐচ্ছিক)',
     copySummary:'সামারি কপি করো', copiedMsg:'কপি হয়েছে — এখন হোয়াটসঅ্যাপে পেস্ট করো', copyFailedMsg:'কপি করা যায়নি',
@@ -388,6 +389,7 @@ const T = {
     pickAtLeastOne:'Pick at least one partner',
     editSite:'Edit site', participantsEditNote:'Unchecking someone removes them from future profit splits on this site — past entries stay as they were, so it is cleaner to drop them starting from a new site/stage instead',
     confirmLogout:'Are you sure you want to log out?',
+    changePin:'Change PIN', newPin:'New PIN', confirmPin:'Re-enter PIN', pinMismatch:'The two PINs do not match', pinChangedMsg:'PIN changed',
     stageLabel:'Stage/month label (optional)', stageLabelPlaceholder:'e.g. September bill, Stage 2',
     addWithdrawal:'Add withdrawal', withdrawalNote:'Reason for withdrawal (optional)',
     copySummary:'Copy summary', copiedMsg:'Copied — paste it into WhatsApp', copyFailedMsg:'Could not copy',
@@ -1352,19 +1354,21 @@ function viewSettings(){
     <div class="section-head"><div><h2>${t('settings')}</h2>${!canManage?`<p>${t('adminOnly')}</p>`:''}</div></div>
     <div class="card">
       <div class="card-title">${t('partners_')} ${STATE.partners.length ? '('+STATE.partners.length+'/4+)' : ''}</div>
-      ${STATE.partners.length===0 ? `<div class="empty" style="padding:10px;">—</div>` : STATE.partners.map(p=>`
+      ${STATE.partners.length===0 ? `<div class="empty" style="padding:10px;">—</div>` : STATE.partners.map(p=>{
+        const canChangePin = canManage || (me && p.id===me.id);
+        return `
         <div class="flex-between" style="padding:8px 0; border-bottom:1px solid var(--line);">
           <div>
             <div style="font-weight:700; font-size:13.5px;">${escapeHtml(p.name)} ${p.isAdmin?'<span class="pill approved">'+t('isAdmin')+'</span>':''}</div>
             <div style="font-size:11.5px; color:var(--ink-soft);">PIN: ${'•'.repeat((p.pin||'').length)}</div>
           </div>
-          ${canManage ? `
-          <div style="display:flex; gap:6px;">
-            ${!p.isAdmin?`<button class="btn ghost small" onclick="makeAdmin('${p.id}')">${t('makeAdmin')}</button>`:''}
-            <button class="btn danger small" onclick="confirmRemovePartner('${p.id}')">${t('remove')}</button>
-          </div>` : ''}
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            ${canChangePin ? `<button class="btn ghost small" onclick="openChangePinModal('${p.id}')">${t('changePin')}</button>` : ''}
+            ${canManage ? `${!p.isAdmin?`<button class="btn ghost small" onclick="makeAdmin('${p.id}')">${t('makeAdmin')}</button>`:''}
+            <button class="btn danger small" onclick="confirmRemovePartner('${p.id}')">${t('remove')}</button>` : ''}
+          </div>
         </div>
-      `).join('')}
+      `;}).join('')}
       ${canManage ? `
       <div class="divider"></div>
       <div class="row2">
@@ -1378,6 +1382,27 @@ function viewSettings(){
   `;
 }
 function attachSettingsHandlers(){ /* using inline onclick, nothing extra needed */ }
+function openChangePinModal(partnerId){
+  const p = STATE.partners.find(x=>x.id===partnerId);
+  if(!p) return;
+  openModal(`
+    <div class="modal-head"><h3>${t('changePin')} — ${escapeHtml(p.name)}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <div class="field"><label>${t('newPin')}</label><input id="f_newPin" type="password" inputmode="numeric" maxlength="6"></div>
+    <div class="field"><label>${t('confirmPin')}</label><input id="f_confirmPin" type="password" inputmode="numeric" maxlength="6"></div>
+    <div id="pinMismatchNote" style="font-size:11.5px; color:var(--brick); margin-top:-6px; margin-bottom:8px; display:none;">${t('pinMismatch')}</div>
+    <button class="btn amber" style="width:100%;" onclick="submitChangePin('${partnerId}')">${t('save')}</button>
+  `);
+}
+async function submitChangePin(partnerId){
+  const newPin = document.getElementById('f_newPin').value.trim();
+  const confirmPin = document.getElementById('f_confirmPin').value.trim();
+  if(!newPin){ showToast('PIN?'); return; }
+  if(newPin !== confirmPin){ document.getElementById('pinMismatchNote').style.display='block'; return; }
+  await fsUpdateDoc('partners', partnerId, {pin:newPin});
+  closeModal();
+  showToast(t('pinChangedMsg'));
+  renderRoute();
+}
 async function submitAddPartner(){
   const name = document.getElementById('np_name').value.trim();
   const pin = document.getElementById('np_pin').value.trim();
