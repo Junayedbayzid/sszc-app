@@ -234,6 +234,7 @@
   .file-input-wrap{
     border:1.5px dashed var(--line); border-radius:8px; padding:12px; text-align:center; font-size:12.5px; color:var(--ink-soft); cursor:pointer;
   }
+  .total-row td{border-top:2px solid var(--ink); font-weight:800; padding-top:10px;}
 </style>
 </head>
 <body>
@@ -411,6 +412,20 @@ const T = {
     addWithdrawal:'উত্তোলন যোগ করো', withdrawalNote:'কেন উত্তোলন করছো (ঐচ্ছিক)',
     copySummary:'সামারি কপি করো', copiedMsg:'কপি হয়েছে — এখন হোয়াটসঅ্যাপে পেস্ট করো', copyFailedMsg:'কপি করা যায়নি',
     entitlement:'মোট প্রাপ্য', withdrawn:'উত্তোলিত', netBalance:'বর্তমান ব্যালেন্স',
+    profitShare:'লভ্যাংশ', reimbursement:'খরচ ফেরত', balanceLeft:'বাকি', total:'মোট',
+    balanceFormula:'বাকি = লভ্যাংশ + খরচ ফেরত − উত্তোলিত',
+    leftChip:'চলে গেছে', joinedOn:'যোগ দিয়েছে', markLeft:'চলে গেছে', markLeftTitle:'চলে গেছে চিহ্নিত করো',
+    markLeftNote:'এই পার্টনার আর লগইন করতে পারবে না এবং নতুন সাইট বা খরচের তালিকায় আসবে না। তার পুরানো সব হিসাব আগের মতোই থাকবে।',
+    leftDate:'চলে যাওয়ার তারিখ', rejoin:'ফিরিয়ে আনো', leftMsg:'চলে গেছে চিহ্নিত হয়েছে', rejoinMsg:'আবার চালু হয়েছে',
+    cannotLeftAdmin:'এডমিনকে চলে গেছে করা যাবে না — আগে অন্য কাউকে এডমিন বানাও',
+    hasHistoryUseLeft:'এই পার্টনারের হিসাব আছে, তাই মুছে ফেলা যাবে না — “চলে গেছে” ব্যবহার করো',
+    payoff:'অন্যের হয়ে পরিশোধ', payoffFrom:'কে দিয়েছে', payoffTo:'কাকে দিয়েছে',
+    payoffNote:'একজন পার্টনার নিজের পকেট থেকে আরেকজনের পাওনা মিটিয়ে দিলে এটা দিতে হবে। যে দিয়েছে তার পাওনা বাড়বে, যে পেয়েছে তার কমবে।',
+    payoffSame:'যে দিয়েছে আর যে পেয়েছে একই হতে পারে না',
+    transferHistory:'উত্তোলন ও পরিশোধের হিস্ট্রি',
+    expenseShareTitle:'খরচের হিসাব', paidCol:'জমা', shareCol:'ভাগ', dueCol:'বাকি',
+    expenseShareNote:'বাকি = জমা − ভাগ। + মানে পাবে, − মানে দিতে হবে।', payoffIncluded:'পরিশোধ-সমন্বয়সহ',
+    sharersLabel:'কারা এই খরচের ভাগ নিচ্ছে', sharersNote:'ডিফল্টে সবাই টিক দেওয়া — যে পার্টনার এই খরচে অংশ নিচ্ছে না তার টিক তুলে দাও',
   },
   en: {
     appName:'SSZC', tagline:'Partnership Ledger',
@@ -463,6 +478,20 @@ const T = {
     addWithdrawal:'Add withdrawal', withdrawalNote:'Reason for withdrawal (optional)',
     copySummary:'Copy summary', copiedMsg:'Copied — paste it into WhatsApp', copyFailedMsg:'Could not copy',
     entitlement:'Gross entitlement', withdrawn:'Withdrawn', netBalance:'Net balance',
+    profitShare:'Profit share', reimbursement:'Expense refund', balanceLeft:'Balance', total:'Total',
+    balanceFormula:'Balance = profit share + expense refund − withdrawn',
+    leftChip:'Left', joinedOn:'Joined', markLeft:'Mark as left', markLeftTitle:'Mark as left',
+    markLeftNote:'This partner will no longer be able to log in and will not appear in new site or expense lists. All their past accounts stay exactly as they were.',
+    leftDate:'Date left', rejoin:'Reactivate', leftMsg:'Marked as left', rejoinMsg:'Reactivated',
+    cannotLeftAdmin:'The admin cannot be marked as left — make someone else admin first',
+    hasHistoryUseLeft:'This partner has accounts on record, so cannot be deleted — use “Mark as left”',
+    payoff:'Paid on behalf of another', payoffFrom:'Who paid', payoffTo:'Paid to',
+    payoffNote:'Use this when one partner pays another partner\u2019s dues out of their own pocket. The payer is owed more, the receiver is owed less.',
+    payoffSame:'Payer and receiver cannot be the same person',
+    transferHistory:'Withdrawals and payoffs',
+    expenseShareTitle:'Expense accounts', paidCol:'Paid', shareCol:'Share', dueCol:'Remaining',
+    expenseShareNote:'Remaining = paid − share. Plus means to receive, minus means to pay.', payoffIncluded:'includes payoff adjustments',
+    sharersLabel:'Who shares this expense', sharersNote:'Everyone is checked by default — uncheck any partner who is not part of this expense',
   }
 };
 function t(key){ return T[STATE.lang][key] || key; }
@@ -520,9 +549,7 @@ function computeSiteSummary(siteId){
   // Filter to partners who still actually exist — if someone was deleted from
   // Settings entirely, their locked-in share on old sites redistributes among
   // whoever's left instead of silently disappearing.
-  const existingIds = new Set(STATE.partners.map(p=>p.id));
-  const rawParticipants = (site.participants && site.participants.length) ? site.participants : STATE.partners.map(p=>p.id);
-  const participants = rawParticipants.filter(pid=>existingIds.has(pid));
+  const participants = siteParticipants(site);
 
   // Expenses are subtracted from the pool FIRST, then what remains splits equally.
   // Whoever personally fronted an expense gets that amount credited back to them
@@ -556,42 +583,100 @@ function computeCompanyNetProfit(){
   return totalDistributable - totalSiteExpense - unassignedGeneral;
 }
 
-// Combined ledger per partner across ALL sites + all approved entries
-function computePartnerBalances(){
-  const balances = {};
-  STATE.partners.forEach(p=> balances[p.id] = 0);
+// ===== Partner status helpers — partners can join or leave without any code change =====
+function isActive(p){ return !!p && p.active !== false; }
+function activePartners(){ return STATE.partners.filter(isActive); }
+function numFmt(n){
+  const v = Math.round((n||0)*100)/100;
+  return (v<0?'-':'') + Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});
+}
+function partnerOptionsHtml(selectedId, includeAll){
+  return STATE.partners.filter(p=> includeAll || isActive(p) || p.id===selectedId).map(p=>
+    `<option value="${p.id}" ${p.id===selectedId?'selected':''}>${escapeHtml(p.name)}${isActive(p)?'':' ('+t('leftChip')+')'}</option>`
+  ).join('');
+}
+// Who shares a site's profit and expenses — only partners who still exist.
+function siteParticipants(site){
+  const existingIds = new Set(STATE.partners.map(p=>p.id));
+  const raw = (site.participants && site.participants.length) ? site.participants : STATE.partners.map(p=>p.id);
+  return raw.filter(pid=>existingIds.has(pid));
+}
+// Who shares a general (not yet assigned to a site) expense.
+function generalExpenseSharers(e){
+  const existingIds = new Set(STATE.partners.map(p=>p.id));
+  if(e.sharedBy && e.sharedBy.length) return e.sharedBy.filter(id=>existingIds.has(id));
+  // older entries: everyone who was already in the business when it was recorded
+  return STATE.partners.filter(p=> (!p.joinedAt || p.joinedAt <= e.createdAt) && (!p.leftAt || p.leftAt >= e.createdAt)).map(p=>p.id);
+}
+function partnerHasHistory(id){
+  return STATE.entries.some(e=> e.submittedBy===id || e.paidBy===id || e.toPartner===id || e.approvedBy===id)
+      || STATE.sites.some(s=> (s.participants||[]).includes(id));
+}
+
+// Per-partner breakdown: profit share + expense refund − withdrawn = balance
+function computePartnerBreakdown(){
+  const rows = {};
+  STATE.partners.forEach(p=> rows[p.id] = {profit:0, reimb:0, withdrawn:0, balance:0});
   STATE.sites.forEach(site=>{
     const sum = computeSiteSummary(site.id);
     if(!sum) return;
-    // credit: expenses each partner personally paid (fronted cash), owed back to them
-    sum.expenses.forEach(e=>{
-      if(balances[e.paidBy] !== undefined) balances[e.paidBy] += Number(e.amount||0);
-    });
-    // credit: equal share of the pool AFTER expenses are already subtracted —
-    // only among this site's participants, so total paid out per site == totalDistributable exactly
-    sum.participants.forEach(pid=>{
-      if(balances[pid] !== undefined) balances[pid] += sum.perPartnerShare;
-    });
+    sum.expenses.forEach(e=>{ if(rows[e.paidBy]) rows[e.paidBy].reimb += Number(e.amount||0); });
+    sum.participants.forEach(pid=>{ if(rows[pid]) rows[pid].profit += sum.perPartnerShare; });
   });
-  // credit: general/office expenses (not yet linked to a site) — still owed back to whoever paid
-  computeGeneralSummary().expenses.forEach(e=>{
-    if(balances[e.paidBy] !== undefined) balances[e.paidBy] += Number(e.amount||0);
+  computeGeneralSummary().expenses.forEach(e=>{ if(rows[e.paidBy]) rows[e.paidBy].reimb += Number(e.amount||0); });
+  STATE.entries.filter(e=>e.status==='approved').forEach(e=>{
+    const amt = Number(e.amount||0);
+    if(e.type==='withdrawal'){
+      if(rows[e.paidBy]) rows[e.paidBy].withdrawn += amt;
+    } else if(e.type==='payoff'){
+      // one partner paid another partner's dues out of their own pocket
+      if(rows[e.paidBy]) rows[e.paidBy].reimb += amt;
+      if(rows[e.toPartner]) rows[e.toPartner].withdrawn += amt;
+    }
   });
-  // debit: withdrawals
-  STATE.entries.filter(e=>e.type==='withdrawal' && e.status==='approved').forEach(w=>{
-    if(balances[w.paidBy] !== undefined) balances[w.paidBy] -= Number(w.amount||0);
+  Object.keys(rows).forEach(id=>{ const r=rows[id]; r.balance = r.profit + r.reimb - r.withdrawn; });
+  return rows;
+}
+function computePartnerBalances(){
+  const br = computePartnerBreakdown(); const out = {};
+  Object.keys(br).forEach(id=> out[id] = br[id].balance);
+  return out;
+}
+function computeWithdrawn(partnerId){ const r = computePartnerBreakdown()[partnerId]; return r ? r.withdrawn : 0; }
+function computeGrossEntitlement(partnerId, balances){ return (balances[partnerId]||0) + computeWithdrawn(partnerId); }
+function shownPartners(br){
+  return STATE.partners.filter(p=>{
+    if(isActive(p)) return true;
+    const r = br[p.id];
+    return !!r && (Math.abs(r.profit)+Math.abs(r.reimb)+Math.abs(r.withdrawn)) > 0.004;
   });
-  return balances;
 }
 
-function computeWithdrawn(partnerId){
-  return STATE.entries.filter(e=>e.type==='withdrawal' && e.status==='approved' && e.paidBy===partnerId)
-    .reduce((s,e)=>s+Number(e.amount||0),0);
-}
-// "Gross entitlement" = current balance + whatever they've already withdrawn —
-// i.e. the total they've earned/are owed before any withdrawals came out of it.
-function computeGrossEntitlement(partnerId, balances){
-  return (balances[partnerId]||0) + computeWithdrawn(partnerId);
+// Expense table: what each partner put in, their fair share, and what is left
+function computeExpenseShareTable(){
+  const rows = {};
+  STATE.partners.forEach(p=> rows[p.id] = {paid:0, share:0, settle:0, due:0});
+  STATE.entries.filter(e=>e.type==='expense' && e.status==='approved').forEach(e=>{
+    const amt = Number(e.amount||0);
+    let sharers;
+    if(e.siteId){
+      const site = STATE.sites.find(s=>s.id===e.siteId);
+      if(!site) return;
+      sharers = siteParticipants(site);
+    } else {
+      sharers = generalExpenseSharers(e);
+    }
+    if(!sharers.length) return;
+    if(rows[e.paidBy]) rows[e.paidBy].paid += amt;
+    sharers.forEach(pid=>{ if(rows[pid]) rows[pid].share += amt/sharers.length; });
+  });
+  STATE.entries.filter(e=>e.type==='payoff' && e.status==='approved').forEach(e=>{
+    const amt = Number(e.amount||0);
+    if(rows[e.paidBy]) rows[e.paidBy].settle += amt;
+    if(rows[e.toPartner]) rows[e.toPartner].settle -= amt;
+  });
+  Object.keys(rows).forEach(id=>{ const r=rows[id]; r.due = r.paid - r.share + r.settle; });
+  return rows;
 }
 
 // Total cash the company must eventually pay out across all 4 partners combined —
@@ -608,7 +693,8 @@ function pendingCount(){
 
 // ===================== Data mutations (write straight to Firestore) =====================
 async function addPartner(name, pin, isAdmin){
-  const p = {id:uid(), name, pin, isAdmin: !!isAdmin};
+  const p = {id:uid(), name, pin, isAdmin: !!isAdmin, active:true};
+  if(STATE.currentUser !== '__setup__' && STATE.partners.length>0) p.joinedAt = Date.now();
   await fsSetDoc('partners', p.id, p);
   return p;
 }
@@ -623,14 +709,49 @@ function confirmRemovePartner(id){
   const isFirstRun = STATE.currentUser === '__setup__';
   const me = isFirstRun ? null : STATE.partners.find(p=>p.id===STATE.currentUser);
   if(!isFirstRun && !(me && me.isAdmin)) return; // admin-only action (setup phase is exempt)
+  if(!isFirstRun && partnerHasHistory(id)){ showToast(t('hasHistoryUseLeft')); return; }
   const p = STATE.partners.find(x=>x.id===id);
   openConfirmModal(t('confirmRemovePartner').replace('{name}', p?p.name:''), t('remove'), async ()=>{
     await removePartner(id);
     renderRoute();
   });
 }
+// A partner who leaves is marked "left" instead of being deleted, so history stays intact.
+function openLeftModal(id){
+  const me = STATE.partners.find(p=>p.id===STATE.currentUser);
+  if(!me || !me.isAdmin) return;
+  const p = STATE.partners.find(x=>x.id===id);
+  if(!p) return;
+  if(p.isAdmin){ showToast(t('cannotLeftAdmin')); return; }
+  const today = new Date().toISOString().slice(0,10);
+  openModal(`
+    <div class="modal-head"><h3>${t('markLeftTitle')} — ${escapeHtml(p.name)}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <p style="font-size:13px; color:var(--ink-soft); margin-bottom:12px;">${t('markLeftNote')}</p>
+    <div class="field"><label>${t('leftDate')}</label><input id="f_leftDate" type="date" value="${today}"></div>
+    <label style="display:flex; align-items:flex-start; gap:8px; font-size:12.5px; margin-bottom:14px; cursor:pointer;">
+      <input type="checkbox" style="width:auto; margin-top:2px;" onchange="document.getElementById('leftConfirmBtn').disabled = !this.checked;">
+      <span>${t('consciouslyConfirm')}</span>
+    </label>
+    <button class="btn danger" style="width:100%" id="leftConfirmBtn" disabled onclick="submitLeft('${id}')">${t('markLeft')}</button>
+  `);
+}
+async function submitLeft(id){
+  const d = document.getElementById('f_leftDate').value;
+  const leftAt = d ? new Date(d+'T23:59:59').getTime() : Date.now();
+  await fsUpdateDoc('partners', id, {active:false, leftAt});
+  closeModal();
+  showToast(t('leftMsg'));
+  renderRoute();
+}
+async function rejoinPartner(id){
+  const me = STATE.partners.find(p=>p.id===STATE.currentUser);
+  if(!me || !me.isAdmin) return;
+  await fsUpdateDoc('partners', id, {active:true, leftAt:null});
+  showToast(t('rejoinMsg'));
+  renderRoute();
+}
 async function addSite(data){
-  const s = {id:uid(), name:data.name, kafeelPercent:data.kafeelPercent, investor:data.investor||null, participants:data.participants||STATE.partners.map(p=>p.id), createdAt:Date.now(), createdBy:STATE.currentUser};
+  const s = {id:uid(), name:data.name, kafeelPercent:data.kafeelPercent, investor:data.investor||null, participants:data.participants||activePartners().map(p=>p.id), createdAt:Date.now(), createdBy:STATE.currentUser};
   await fsSetDoc('sites', s.id, s);
   return s;
 }
@@ -694,7 +815,7 @@ function renderLogin(){
         <div class="card">
           <div class="card-title">${t('selectPartner')}</div>
           <div class="partner-pick" id="partnerPick">
-            ${STATE.partners.map(p=>`
+            ${activePartners().map(p=>`
               <button class="partner-btn ${_loginPickId===p.id?'selected':''}" onclick="pickLoginPartner('${p.id}')">
                 <div class="avatar">${initials(p.name)}</div>
                 ${escapeHtml(p.name)}
@@ -719,7 +840,7 @@ function pickLoginPartner(id){ _loginPickId = id; renderLogin(); }
 function doLogin(){
   const pin = document.getElementById('pinInput').value.trim();
   const p = STATE.partners.find(p=>p.id===_loginPickId);
-  if(p && p.pin === pin){
+  if(p && isActive(p) && p.pin === pin){
     STATE.currentUser = p.id;
     STATE.route = 'dashboard';
     _loginPickId = null;
@@ -876,7 +997,7 @@ function viewDashboard(){
             <div style="font-size:11.5px; color:var(--ink-soft); margin-top:2px;">${escapeHtml(partnerName(e.paidBy))} · ${fmtDate(e.createdAt)} · ${money(e.amount)}</div>
           </div>
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
-            ${canDeleteEntry(e) ? `<button class="btn ghost small" onclick="openEditExpenseModal('${e.id}')">${t('edit')}</button>` : ''}
+            ${canDeleteEntry(e) ? `<button class="btn ghost small" onclick="editEntry('${e.id}')">${t('edit')}</button>` : ''}
             ${(me && me.isAdmin && STATE.sites.length>0) ? `<button class="btn ghost small" onclick="openAssignSiteModal('${e.id}')">${t('assignToSite')}</button>` : ''}
             ${canDeleteEntry(e) ? `<button class="btn danger small" onclick="deleteEntry('${e.id}')">${t('remove')}</button>` : ''}
           </div>
@@ -884,48 +1005,107 @@ function viewDashboard(){
       `).join('')}
     </div>`}
 
+    ${viewBalanceTable()}
+    ${viewExpenseShareTable()}
+    ${viewTransferHistory()}
+  `;
+}
+
+function viewBalanceTable(){
+  const br = computePartnerBreakdown();
+  const shown = shownPartners(br);
+  const tot = {profit:0, reimb:0, withdrawn:0, balance:0};
+  shown.forEach(p=>{ const r=br[p.id]; tot.profit+=r.profit; tot.reimb+=r.reimb; tot.withdrawn+=r.withdrawn; tot.balance+=r.balance; });
+  const th = 'text-align:right; font-size:10.5px;';
+  return `
     <div class="card" style="margin-top:16px;">
-      <div class="card-title">${t('partnerBalances')}</div>
-      <table>
-        <thead><tr><th>${t('name')}</th><th style="text-align:right">${t('entitlement')}</th><th style="text-align:right">${t('withdrawn')}</th><th style="text-align:right">${t('netBalance')}</th></tr></thead>
+      <div class="card-title">${t('partnerBalances')} (SAR)</div>
+      <table style="font-size:12px;">
+        <thead><tr><th>${t('name')}</th><th style="${th}">${t('profitShare')}</th><th style="${th}">${t('reimbursement')}</th><th style="${th}">${t('withdrawn')}</th><th style="${th}">${t('balanceLeft')}</th></tr></thead>
         <tbody>
-          ${STATE.partners.map(p=>{
-            const entitlement = computeGrossEntitlement(p.id, balances);
-            const withdrawn = computeWithdrawn(p.id);
-            const net = balances[p.id]||0;
+          ${shown.map(p=>{
+            const r = br[p.id];
             return `
             <tr>
-              <td>${escapeHtml(p.name)}${p.isAdmin?' <span class="pill approved">'+t('isAdmin')+'</span>':''}</td>
-              <td class="num-cell">${money(entitlement)}</td>
-              <td class="num-cell">${money(withdrawn)}</td>
-              <td class="num-cell ${net<0?'neg-text':'pos-text'}">${money(net)}</td>
+              <td>${escapeHtml(p.name)}${p.isAdmin?' <span class="pill approved">'+t('isAdmin')+'</span>':''}${isActive(p)?'':' <span class="pill rejected">'+t('leftChip')+'</span>'}</td>
+              <td class="num-cell">${numFmt(r.profit)}</td>
+              <td class="num-cell">${numFmt(r.reimb)}</td>
+              <td class="num-cell">${numFmt(r.withdrawn)}</td>
+              <td class="num-cell ${r.balance<0?'neg-text':'pos-text'}">${numFmt(r.balance)}</td>
             </tr>`;
           }).join('')}
+          <tr class="total-row">
+            <td>${t('total')}</td>
+            <td class="num-cell">${numFmt(tot.profit)}</td>
+            <td class="num-cell">${numFmt(tot.reimb)}</td>
+            <td class="num-cell">${numFmt(tot.withdrawn)}</td>
+            <td class="num-cell ${tot.balance<0?'neg-text':'pos-text'}">${numFmt(tot.balance)}</td>
+          </tr>
         </tbody>
       </table>
-    </div>
-
-    ${(()=>{
-      const withdrawals = STATE.entries.filter(e=>e.type==='withdrawal' && e.status!=='rejected').sort((a,b)=>b.createdAt-a.createdAt);
-      if(withdrawals.length===0) return '';
-      return `
-      <div class="card" style="margin-top:16px;">
-        <div class="card-title">${t('withdrawalHistory')}</div>
-        ${withdrawals.map(w=>`
-          <div class="flex-between" style="padding:9px 0; border-bottom:1px solid var(--line);">
-            <div>
-              <div style="font-weight:700; font-size:13.5px;">${escapeHtml(partnerName(w.paidBy))} — ${money(w.amount)} ${w.status==='pending'?`<span class="pill pending">${t('pending')}</span>`:''}</div>
-              <div style="font-size:11.5px; color:var(--ink-soft); margin-top:2px;">${escapeHtml(w.description||'')} · ${fmtDate(w.createdAt)}</div>
-            </div>
-            <div style="display:flex; gap:6px; flex-wrap:wrap;">
-              ${canDeleteEntry(w) ? `<button class="btn ghost small" onclick="editEntry('${w.id}')">${t('edit')}</button>` : ''}
-              ${canDeleteEntry(w) ? `<button class="btn danger small" onclick="deleteEntry('${w.id}')">${t('remove')}</button>` : ''}
-            </div>
+      <div style="font-size:11px; color:var(--ink-soft); margin-top:8px;">${t('balanceFormula')}</div>
+    </div>`;
+}
+function viewExpenseShareTable(){
+  const hasExpenses = STATE.entries.some(e=>e.type==='expense' && e.status==='approved');
+  if(!hasExpenses) return '';
+  const et = computeExpenseShareTable();
+  const hasPayoff = STATE.entries.some(e=>e.type==='payoff' && e.status==='approved');
+  const shown = STATE.partners.filter(p=> isActive(p) || (Math.abs(et[p.id].paid)+Math.abs(et[p.id].share)+Math.abs(et[p.id].settle))>0.004);
+  const tot = {paid:0, share:0, due:0};
+  shown.forEach(p=>{ const r=et[p.id]; tot.paid+=r.paid; tot.share+=r.share; tot.due+=r.due; });
+  const th = 'text-align:right; font-size:10.5px;';
+  return `
+    <div class="card" style="margin-top:16px;">
+      <div class="card-title">${t('expenseShareTitle')} (SAR)</div>
+      <table style="font-size:12px;">
+        <thead><tr><th>${t('name')}</th><th style="${th}">${t('paidCol')}</th><th style="${th}">${t('shareCol')}</th><th style="${th}">${t('dueCol')}</th></tr></thead>
+        <tbody>
+          ${shown.map(p=>{
+            const r = et[p.id];
+            return `
+            <tr>
+              <td>${escapeHtml(p.name)}${isActive(p)?'':' <span class="pill rejected">'+t('leftChip')+'</span>'}</td>
+              <td class="num-cell">${numFmt(r.paid)}</td>
+              <td class="num-cell">${numFmt(r.share)}</td>
+              <td class="num-cell ${r.due<0?'neg-text':'pos-text'}">${numFmt(r.due)}</td>
+            </tr>`;
+          }).join('')}
+          <tr class="total-row">
+            <td>${t('total')}</td>
+            <td class="num-cell">${numFmt(tot.paid)}</td>
+            <td class="num-cell">${numFmt(tot.share)}</td>
+            <td class="num-cell">${numFmt(tot.due)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="font-size:11px; color:var(--ink-soft); margin-top:8px;">${t('expenseShareNote')}${hasPayoff?' ('+t('payoffIncluded')+')':''}</div>
+    </div>`;
+}
+function viewTransferHistory(){
+  const items = STATE.entries.filter(e=>(e.type==='withdrawal' || e.type==='payoff') && e.status!=='rejected').sort((a,b)=>b.createdAt-a.createdAt);
+  return `
+    <div class="card" style="margin-top:16px;">
+      <div class="flex-between" style="margin-bottom:6px;">
+        <div class="card-title" style="margin:0;">${t('transferHistory')}</div>
+        <div style="display:flex; gap:6px;">
+          <button class="btn ghost small" onclick="openWithdrawalModal()">+ ${t('withdraw')}</button>
+          <button class="btn ghost small" onclick="openPayoffModal()">+ ${t('payoff')}</button>
+        </div>
+      </div>
+      ${items.length===0 ? `<div class="empty" style="padding:14px;">—</div>` : items.map(w=>`
+        <div class="flex-between" style="padding:9px 0; border-bottom:1px solid var(--line);">
+          <div>
+            <div style="font-weight:700; font-size:13.5px;">${w.type==='payoff' ? escapeHtml(partnerName(w.paidBy))+' → '+escapeHtml(partnerName(w.toPartner)) : escapeHtml(partnerName(w.paidBy))} — ${money(w.amount)} ${w.status==='pending'?`<span class="pill pending">${t('pending')}</span>`:''}</div>
+            <div style="font-size:11.5px; color:var(--ink-soft); margin-top:2px;">${w.type==='payoff' ? t('payoff')+' · ' : ''}${escapeHtml(w.description||'')} · ${fmtDate(w.createdAt)}</div>
           </div>
-        `).join('')}
-      </div>`;
-    })()}
-  `;
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            ${canDeleteEntry(w) ? `<button class="btn ghost small" onclick="editEntry('${w.id}')">${t('edit')}</button>` : ''}
+            ${canDeleteEntry(w) ? `<button class="btn danger small" onclick="deleteEntry('${w.id}')">${t('remove')}</button>` : ''}
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
 }
 
 // ===================== Sites list =====================
@@ -1022,6 +1202,7 @@ function editEntry(entryId){
   if(e.type==='expense') openEditExpenseModal(e);
   else if(e.type==='income') openEditIncomeModal(e);
   else if(e.type==='withdrawal') openEditWithdrawalModal(e);
+  else if(e.type==='payoff') openEditPayoffModal(e);
 }
 function openEditWithdrawalModal(e){
   const me = STATE.partners.find(p=>p.id===STATE.currentUser);
@@ -1030,7 +1211,7 @@ function openEditWithdrawalModal(e){
     <div class="modal-head"><h3>${t('edit')} — ${t('addWithdrawal')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
     ${canPickAnyone ? `
     <div class="field"><label>${t('paidBy')}</label>
-      <select id="f_wPartner">${STATE.partners.map(p=>`<option value="${p.id}" ${p.id===e.paidBy?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>
+      <select id="f_wPartner">${partnerOptionsHtml(e.paidBy, true)}</select>
     </div>` : ''}
     <div class="field"><label>${t('amount')}</label><input id="f_wAmt" type="number" step="0.01" value="${e.amount}"></div>
     <div class="field"><label>${t('description')}</label><input id="f_wDesc" value="${escapeHtml(e.description||'')}"></div>
@@ -1051,26 +1232,36 @@ async function submitEditWithdrawal(entryId){
   renderRoute();
 }
 function openEditExpenseModal(e){
+  const sel = e.siteId ? null : ((e.sharedBy && e.sharedBy.length) ? e.sharedBy : generalExpenseSharers(e));
   openModal(`
     <div class="modal-head"><h3>${t('edit')} — ${t('addExpense')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
     <div class="field"><label>${t('amount')}</label><input id="f_amt" type="number" step="0.01" value="${e.amount}"></div>
     <div class="field"><label>${t('description')}</label><input id="f_desc" value="${escapeHtml(e.description||'')}"></div>
     <div class="field"><label>${t('paidBy')}</label>
-      <select id="f_paidBy">${STATE.partners.map(p=>`<option value="${p.id}" ${p.id===e.paidBy?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>
+      <select id="f_paidBy">${partnerOptionsHtml(e.paidBy, false)}</select>
     </div>
+    ${e.siteId ? '' : sharersChecklistHtml(sel)}
     <button class="btn amber" style="width:100%; margin-top:6px;" onclick="submitEditExpense('${e.id}')">${t('save')}</button>
   `);
 }
 async function submitEditExpense(entryId){
+  const existing = STATE.entries.find(x=>x.id===entryId);
   const amount = parseFloat(document.getElementById('f_amt').value);
   const description = document.getElementById('f_desc').value.trim();
   const paidBy = document.getElementById('f_paidBy').value;
   if(!amount || amount<=0){ showToast('Amount?'); return; }
-  await fsUpdateDoc('entries', entryId, {amount, description, paidBy});
+  const patch = {amount, description, paidBy};
+  if(existing && !existing.siteId){
+    const sharedBy = Array.from(document.querySelectorAll('.f_sharer:checked')).map(el=>el.value);
+    if(sharedBy.length===0){ showToast(t('pickAtLeastOne')); return; }
+    patch.sharedBy = sharedBy;
+  }
+  await fsUpdateDoc('entries', entryId, patch);
   closeModal();
   showToast(t('entrySaved'));
   renderRoute();
 }
+
 function openEditIncomeModal(e){
   openModal(`
     <div class="modal-head"><h3>${t('edit')} — ${t('addIncome')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
@@ -1104,7 +1295,7 @@ function openNewSiteModal(){
     <div class="field">
       <label>${t('participants')}</label>
       <div style="font-size:11.5px; color:var(--ink-soft); margin-bottom:6px;">${t('participantsNote')}</div>
-      ${STATE.partners.map(p=>`
+      ${activePartners().map(p=>`
         <label style="display:flex; align-items:center; gap:8px; padding:6px 0;">
           <input type="checkbox" class="f_participant" value="${p.id}" checked style="width:auto;"> ${escapeHtml(p.name)}
         </label>
@@ -1159,7 +1350,7 @@ function openEditSiteModal(siteId){
     <div class="field">
       <label>${t('participants')}</label>
       <div style="font-size:11.5px; color:var(--ink-soft); margin-bottom:6px;">${t('participantsEditNote')}</div>
-      ${STATE.partners.map(p=>`
+      ${STATE.partners.filter(p=>isActive(p)||currentParticipants.includes(p.id)).map(p=>`
         <label style="display:flex; align-items:center; gap:8px; padding:6px 0;">
           <input type="checkbox" class="f_participant" value="${p.id}" ${currentParticipants.includes(p.id)?'checked':''} style="width:auto;"> ${escapeHtml(p.name)}
         </label>
@@ -1299,19 +1490,33 @@ function renderEntryRow(e){
     </div>`;
 }
 
+function sharersChecklistHtml(selectedIds){
+  const list = STATE.partners.filter(p=> isActive(p) || (selectedIds||[]).includes(p.id));
+  return `
+    <div class="field">
+      <label>${t('sharersLabel')}</label>
+      <div style="font-size:11.5px; color:var(--ink-soft); margin-bottom:6px;">${t('sharersNote')}</div>
+      ${list.map(p=>`
+        <label style="display:flex; align-items:center; gap:8px; padding:5px 0;">
+          <input type="checkbox" class="f_sharer" value="${p.id}" ${(!selectedIds || selectedIds.includes(p.id))?'checked':''} style="width:auto;"> ${escapeHtml(p.name)}
+        </label>`).join('')}
+    </div>`;
+}
 function openExpenseModal(siteId){
   openModal(`
     <div class="modal-head"><h3>${t('addExpense')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
     <div class="field"><label>${t('amount')}</label><input id="f_amt" type="number" step="0.01"></div>
     <div class="field"><label>${t('description')}</label><input id="f_desc"></div>
     <div class="field"><label>${t('paidBy')}</label>
-      <select id="f_paidBy">${STATE.partners.map(p=>`<option value="${p.id}" ${p.id===STATE.currentUser?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>
+      <select id="f_paidBy">${partnerOptionsHtml(STATE.currentUser, false)}</select>
     </div>
+    ${siteId ? '' : sharersChecklistHtml(null)}
     ${receiptFieldHtml()}
     <div id="receiptRequiredNote" style="font-size:11.5px; color:var(--brick); margin-top:-6px; margin-bottom:8px; display:none;">${t('receiptRequired')}</div>
     <button class="btn amber" style="width:100%; margin-top:6px;" onclick="submitExpense(${siteId?`'${siteId}'`:'null'})">${t('submit')}</button>
   `);
 }
+
 function receiptFieldHtml(){
   return `
     <div class="field">
@@ -1359,8 +1564,15 @@ async function submitExpense(siteId){
   const description = document.getElementById('f_desc').value.trim();
   const paidBy = document.getElementById('f_paidBy').value;
   if(!amount || amount<=0){ showToast('Amount?'); return; }
+  let sharedBy = null;
+  if(!siteId){
+    sharedBy = Array.from(document.querySelectorAll('.f_sharer:checked')).map(el=>el.value);
+    if(sharedBy.length===0){ showToast(t('pickAtLeastOne')); return; }
+  }
   if(!_pendingReceipt){ document.getElementById('receiptRequiredNote').style.display='block'; return; }
-  await addEntry({siteId: siteId||null, type:'expense', amount, description, paidBy, receipt:_pendingReceipt});
+  const entry = {siteId: siteId||null, type:'expense', amount, description, paidBy, receipt:_pendingReceipt};
+  if(sharedBy) entry.sharedBy = sharedBy;
+  await addEntry(entry);
   _pendingReceipt = null;
   closeModal();
   showToast(t('entrySaved'));
@@ -1401,7 +1613,7 @@ function openWithdrawalModal(){
     <div class="modal-head"><h3>${t('addWithdrawal')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
     ${canPickAnyone ? `
     <div class="field"><label>${t('paidBy')}</label>
-      <select id="f_wPartner">${STATE.partners.map(p=>`<option value="${p.id}" ${p.id===STATE.currentUser?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>
+      <select id="f_wPartner">${partnerOptionsHtml(STATE.currentUser, true)}</select>
     </div>` : ''}
     <div class="field"><label>${t('amount')}</label><input id="f_wAmt" type="number" step="0.01"></div>
     <div class="field"><label>${t('description')}</label><input id="f_wDesc" placeholder="${t('withdrawalNote')}"></div>
@@ -1421,20 +1633,89 @@ async function submitWithdrawal(){
   renderRoute();
 }
 
+// ===================== Payoff: one partner pays another's dues =====================
+function openPayoffModal(){
+  const me = STATE.partners.find(p=>p.id===STATE.currentUser);
+  const isAdmin = me && me.isAdmin;
+  openModal(`
+    <div class="modal-head"><h3>${t('payoff')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <p style="font-size:12px; color:var(--ink-soft); margin-bottom:10px;">${t('payoffNote')}</p>
+    <div class="field"><label>${t('payoffFrom')}</label>
+      <select id="f_pFrom" ${isAdmin?'':'disabled'}>${partnerOptionsHtml(STATE.currentUser, true)}</select>
+    </div>
+    <div class="field"><label>${t('payoffTo')}</label>
+      <select id="f_pTo">${partnerOptionsHtml(null, true)}</select>
+    </div>
+    <div class="field"><label>${t('amount')}</label><input id="f_pAmt" type="number" step="0.01"></div>
+    <div class="field"><label>${t('description')}</label><input id="f_pDesc"></div>
+    <button class="btn amber" style="width:100%;" onclick="submitPayoff()">${t('submit')}</button>
+  `);
+}
+async function submitPayoff(){
+  const from = document.getElementById('f_pFrom').value;
+  const to = document.getElementById('f_pTo').value;
+  const amount = parseFloat(document.getElementById('f_pAmt').value);
+  const description = document.getElementById('f_pDesc').value.trim();
+  if(!amount || amount<=0){ showToast('Amount?'); return; }
+  if(from===to){ showToast(t('payoffSame')); return; }
+  await addEntry({siteId:null, type:'payoff', amount, description, paidBy:from, toPartner:to});
+  closeModal();
+  showToast(t('entrySaved'));
+  renderRoute();
+}
+function openEditPayoffModal(e){
+  const me = STATE.partners.find(p=>p.id===STATE.currentUser);
+  const isAdmin = me && me.isAdmin;
+  openModal(`
+    <div class="modal-head"><h3>${t('edit')} — ${t('payoff')}</h3><button class="close-x" onclick="closeModal()">&times;</button></div>
+    <div class="field"><label>${t('payoffFrom')}</label>
+      <select id="f_pFrom" ${isAdmin?'':'disabled'}>${partnerOptionsHtml(e.paidBy, true)}</select>
+    </div>
+    <div class="field"><label>${t('payoffTo')}</label>
+      <select id="f_pTo">${partnerOptionsHtml(e.toPartner, true)}</select>
+    </div>
+    <div class="field"><label>${t('amount')}</label><input id="f_pAmt" type="number" step="0.01" value="${e.amount}"></div>
+    <div class="field"><label>${t('description')}</label><input id="f_pDesc" value="${escapeHtml(e.description||'')}"></div>
+    <button class="btn amber" style="width:100%;" onclick="submitEditPayoff('${e.id}')">${t('save')}</button>
+  `);
+}
+async function submitEditPayoff(entryId){
+  const from = document.getElementById('f_pFrom').value;
+  const to = document.getElementById('f_pTo').value;
+  const amount = parseFloat(document.getElementById('f_pAmt').value);
+  const description = document.getElementById('f_pDesc').value.trim();
+  if(!amount || amount<=0){ showToast('Amount?'); return; }
+  if(from===to){ showToast(t('payoffSame')); return; }
+  await fsUpdateDoc('entries', entryId, {amount, description, paidBy:from, toPartner:to});
+  closeModal();
+  showToast(t('entrySaved'));
+  renderRoute();
+}
+
 // ===================== Copy summary =====================
 function copySummary(){
-  const balances = computePartnerBalances();
-  let lines = [];
-  lines.push('SSZC — ' + t('partnerBalances'));
+  const br = computePartnerBreakdown();
+  const shown = shownPartners(br);
+  const lines = [];
+  lines.push('SSZC — ' + t('partnerBalances') + ' (SAR)');
   lines.push(new Date().toLocaleDateString(STATE.lang==='bn'?'bn-BD':'en-US'));
   lines.push('');
-  STATE.partners.forEach(p=>{
-    const entitlement = computeGrossEntitlement(p.id, balances);
-    const withdrawn = computeWithdrawn(p.id);
-    const net = balances[p.id]||0;
-    lines.push(`${p.name}: ${t('entitlement')} ${money(entitlement)} | ${t('withdrawn')} ${money(withdrawn)} | ${t('netBalance')} ${money(net)}`);
+  const tot = {profit:0, reimb:0, withdrawn:0, balance:0};
+  shown.forEach(p=>{
+    const r = br[p.id];
+    tot.profit+=r.profit; tot.reimb+=r.reimb; tot.withdrawn+=r.withdrawn; tot.balance+=r.balance;
+    lines.push(`${p.name}${isActive(p)?'':' ('+t('leftChip')+')'}: ${t('profitShare')} ${numFmt(r.profit)} | ${t('reimbursement')} ${numFmt(r.reimb)} | ${t('withdrawn')} ${numFmt(r.withdrawn)} | ${t('balanceLeft')} ${numFmt(r.balance)}`);
   });
-  lines.push('');
+  lines.push(`${t('total')}: ${t('profitShare')} ${numFmt(tot.profit)} | ${t('reimbursement')} ${numFmt(tot.reimb)} | ${t('withdrawn')} ${numFmt(tot.withdrawn)} | ${t('balanceLeft')} ${numFmt(tot.balance)}`);
+  if(STATE.entries.some(e=>e.type==='expense' && e.status==='approved')){
+    const et = computeExpenseShareTable();
+    lines.push('');
+    lines.push(t('expenseShareTitle'));
+    STATE.partners.filter(p=> isActive(p) || (Math.abs(et[p.id].paid)+Math.abs(et[p.id].share)+Math.abs(et[p.id].settle))>0.004).forEach(p=>{
+      const r = et[p.id];
+      lines.push(`${p.name}: ${t('paidCol')} ${numFmt(r.paid)} | ${t('shareCol')} ${numFmt(r.share)} | ${t('dueCol')} ${numFmt(r.due)}`);
+    });
+  }
   const text = lines.join('\n');
   if(navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(text).then(()=>showToast(t('copiedMsg'))).catch(()=>showToast(t('copyFailedMsg')));
@@ -1454,12 +1735,13 @@ function viewApprovals(){
       let desc='';
       if(e.type==='expense') desc = `${t('addExpense')} — ${money(e.amount)} — ${escapeHtml(e.description||'')}`;
       else if(e.type==='income') desc = `${t('addIncome')} — ${t('revenue')}: ${money(e.revenue)}, ${t('workerSalary')}: ${money(e.workerSalary)}`;
+      else if(e.type==='payoff') desc = `${t('payoff')} — ${escapeHtml(partnerName(e.paidBy))} → ${escapeHtml(partnerName(e.toPartner))} — ${money(e.amount)}`;
       else desc = `${t('withdraw')} — ${money(e.amount)}`;
       return `
       <div class="card">
         <div class="flex-between" style="margin-bottom:8px;">
           <div>
-            <div style="font-weight:800; font-size:14px;">${site?escapeHtml(site.name):t('generalExpenses')}</div>
+            <div style="font-weight:800; font-size:14px;">${site?escapeHtml(site.name):(e.type==='expense'?t('generalExpenses'):(e.type==='payoff'?t('payoff'):t('withdraw')))}</div>
             <div style="font-size:12.5px; color:var(--ink-soft); margin-top:2px;">${desc}</div>
             <div style="font-size:11.5px; color:var(--ink-soft); margin-top:4px;">${t('submittedBy')}: ${escapeHtml(partnerName(e.submittedBy))} · ${fmtDate(e.createdAt)}</div>
           </div>
@@ -1488,19 +1770,23 @@ function viewSettings(){
   return `
     <div class="section-head"><div><h2>${t('settings')}</h2>${!canManage?`<p>${t('adminOnly')}</p>`:''}</div></div>
     <div class="card">
-      <div class="card-title">${t('partners_')} ${STATE.partners.length ? '('+STATE.partners.length+'/4+)' : ''}</div>
+      <div class="card-title">${t('partners_')} (${STATE.partners.length})</div>
       ${STATE.partners.length===0 ? `<div class="empty" style="padding:10px;">—</div>` : STATE.partners.map(p=>{
         const canChangePin = canManage || (me && p.id===me.id);
+        const active = isActive(p);
+        const hasHistory = !isFirstRun && partnerHasHistory(p.id);
         return `
-        <div class="flex-between" style="padding:8px 0; border-bottom:1px solid var(--line);">
+        <div class="flex-between" style="padding:8px 0; border-bottom:1px solid var(--line); ${active?'':'opacity:0.8;'}">
           <div>
-            <div style="font-weight:700; font-size:13.5px;">${escapeHtml(p.name)} ${p.isAdmin?'<span class="pill approved">'+t('isAdmin')+'</span>':''}</div>
-            <div style="font-size:11.5px; color:var(--ink-soft);">PIN: ${'•'.repeat((p.pin||'').length)}</div>
+            <div style="font-weight:700; font-size:13.5px;">${escapeHtml(p.name)} ${p.isAdmin?'<span class="pill approved">'+t('isAdmin')+'</span>':''} ${active?'':'<span class="pill rejected">'+t('leftChip')+(p.leftAt?' · '+fmtDate(p.leftAt):'')+'</span>'}</div>
+            <div style="font-size:11.5px; color:var(--ink-soft);">PIN: ${'•'.repeat((p.pin||'').length)}${p.joinedAt?' · '+t('joinedOn')+' '+fmtDate(p.joinedAt):''}</div>
           </div>
-          <div style="display:flex; gap:6px; flex-wrap:wrap;">
-            ${canChangePin ? `<button class="btn ghost small" onclick="openChangePinModal('${p.id}')">${t('changePin')}</button>` : ''}
-            ${canManage ? `${!p.isAdmin?`<button class="btn ghost small" onclick="makeAdmin('${p.id}')">${t('makeAdmin')}</button>`:''}
-            <button class="btn danger small" onclick="confirmRemovePartner('${p.id}')">${t('remove')}</button>` : ''}
+          <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
+            ${active && canChangePin ? `<button class="btn ghost small" onclick="openChangePinModal('${p.id}')">${t('changePin')}</button>` : ''}
+            ${canManage && active && !p.isAdmin ? `<button class="btn ghost small" onclick="makeAdmin('${p.id}')">${t('makeAdmin')}</button>` : ''}
+            ${canManage && !isFirstRun && active && !p.isAdmin ? `<button class="btn ghost small" onclick="openLeftModal('${p.id}')">${t('markLeft')}</button>` : ''}
+            ${canManage && !isFirstRun && !active ? `<button class="btn ghost small" onclick="rejoinPartner('${p.id}')">${t('rejoin')}</button>` : ''}
+            ${canManage && !hasHistory ? `<button class="btn danger small" onclick="confirmRemovePartner('${p.id}')">${t('remove')}</button>` : ''}
           </div>
         </div>
       `;}).join('')}
@@ -1623,7 +1909,7 @@ async function init(){
     STATE.loading = false;
     try{
       const savedId = localStorage.getItem('sszc_session');
-      if(savedId && STATE.partners.some(p=>p.id===savedId)){
+      if(savedId && STATE.partners.some(p=>p.id===savedId && isActive(p))){
         STATE.currentUser = savedId;
       }
     }catch(e){}
